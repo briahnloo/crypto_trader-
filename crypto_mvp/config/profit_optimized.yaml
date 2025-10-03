@@ -1,0 +1,465 @@
+# Crypto MVP - Profit Optimized Configuration
+# This configuration is optimized for maximum profit with controlled risk
+
+# Trading Configuration
+trading:
+  timeframe: "1h"
+  symbols:
+    - "BTC/USDT"
+    - "ETH/USDT"
+    - "BNB/USDT"
+    - "ADA/USDT"
+    - "SOL/USDT"
+  strategies:
+    - "momentum"
+    - "breakout"
+    - "arbitrage"
+    - "sentiment"
+    - "whale_tracking"
+  max_open_trades: 5
+  min_trade_interval: 300  # 5 minutes in seconds
+  trade_timeout: 3600  # 1 hour in seconds
+  min_confidence: 0.4  # Reduced from 0.6 to 0.4 for more opportunities
+  min_signal_score: 0.15  # Reduced from 0.3 to 0.15 for more trades
+  cycle_interval: 300  # Time between trading cycles in seconds (5 minutes)
+  initial_capital: 10000  # Starting capital for trading
+  live_mode: false  # Live trading mode (false for paper trading)
+  dry_run: false  # Dry run mode (false to allow simulated trades)
+  ohlcv_limit: 100  # Number of OHLCV candles to fetch
+
+# Risk Management Configuration
+risk:
+  max_drawdown: 0.10  # 10% maximum drawdown
+  stop_loss: 0.02  # 2% stop loss
+  take_profit: 0.04  # 4% take profit
+  position_sizing:
+    method: "fixed_risk"  # fixed_risk, fixed_size, kelly_criterion
+    risk_per_trade: 0.01  # 1% risk per trade
+    max_position_size: 0.1  # 10% max position size
+  daily_loss_limit: 0.03  # 3% daily loss limit
+  max_correlation: 0.7  # Maximum correlation between positions
+  volatility_adjustment: true
+  dynamic_sizing: true
+
+# Exchange Configuration
+exchanges:
+  binance:
+    enabled: true
+    api_key: "your_binance_api_key_here"
+    secret: "your_binance_secret_here"
+    sandbox: true
+    rate_limit: 10
+    timeout: 30
+    symbols:
+      - "BTC/USDT"
+      - "ETH/USDT"
+      - "BNB/USDT"
+      - "ADA/USDT"
+      - "SOL/USDT"
+
+  coinbase:
+    enabled: true
+    api_key: "your_coinbase_api_key_here"
+    secret: "your_coinbase_secret_here"
+    sandbox: true
+    rate_limit: 5
+    timeout: 30
+    symbols:
+      - "BTC-USD"
+      - "ETH-USD"
+
+  ccxt:
+    enabled: true
+    exchanges:
+      - "binance"
+      - "coinbase"
+    rate_limit: 5
+    timeout: 30
+
+# Data Sources Configuration
+data_sources:
+  # Market Data
+  market_data:
+    enabled: true
+    sources:
+      - "binance"
+      - "coinbase"
+    update_interval: 60  # seconds
+    historical_days: 30
+
+  # Technical Indicators
+  technical_indicators:
+    enabled: true
+    indicators:
+      - "rsi"
+      - "macd"
+      - "bollinger_bands"
+      - "atr"
+      - "stochastic"
+      - "williams_r"
+      - "cci"
+      - "obv"
+      - "ichimoku"
+    lookback_periods: 100
+
+  # Sentiment Analysis
+  sentiment:
+    enabled: true
+    sources:
+      social_media:
+        enabled: true
+        platforms:
+          - "twitter"
+          - "reddit"
+        api_keys:
+          twitter: "your_twitter_api_key_here"
+          reddit: "your_reddit_api_key_here"
+        update_interval: 300  # 5 minutes
+
+      news:
+        enabled: true
+        sources:
+          - "coindesk"
+          - "decrypt"
+          - "cointelegraph"
+        api_keys:
+          news_api: "your_news_api_key_here"
+        update_interval: 600  # 10 minutes
+
+      fear_greed:
+        enabled: true
+        api_key: "your_fear_greed_api_key_here"
+        update_interval: 3600  # 1 hour
+
+  # On-Chain Data
+  on_chain:
+    enabled: true
+    sources:
+      - "whale_alert"
+      - "glassnode"
+      - "blockchain_info"
+    api_keys:
+      whale_alert: "your_whale_alert_api_key_here"
+      glassnode: "your_glassnode_api_key_here"
+    update_interval: 1800  # 30 minutes
+    min_whale_value: 1000000  # $1M minimum whale transaction
+
+# Strategy Configuration
+strategies:
+  momentum:
+    enabled: true
+    weight: 0.30  # Increased from 0.25
+    parameters:
+      rsi_period: 14
+      rsi_oversold: 25  # More aggressive from 30
+      rsi_overbought: 75  # More aggressive from 70
+      macd_fast: 12
+      macd_slow: 26
+      macd_signal: 9
+      min_volume_ratio: 1.2  # Reduced from 1.5
+
+  breakout:
+    enabled: true
+    weight: 0.25  # Increased from 0.20
+    parameters:
+      lookback_period: 20
+      breakout_threshold: 0.015  # Reduced from 0.02 for more signals
+      volume_confirmation: true
+      min_volume_multiplier: 1.5  # Reduced from 2.0
+
+  arbitrage:
+    enabled: true
+    weight: 0.20  # Increased from 0.15
+    parameters:
+      min_spread: 0.0005  # Reduced from 0.001 for more opportunities
+      max_position_size: 0.05
+      execution_timeout: 30
+      slippage_tolerance: 0.0005
+
+  sentiment:
+    enabled: true
+    weight: 0.15  # Reduced from 0.20
+    parameters:
+      sentiment_threshold: 0.4  # Reduced from 0.6 for more signals
+      news_weight: 0.4
+      social_weight: 0.3
+      fear_greed_weight: 0.3
+      min_confidence: 0.5  # Reduced from 0.7
+
+  whale_tracking:
+    enabled: true
+    weight: 0.10  # Reduced from 0.20
+    parameters:
+      min_whale_value: 500000  # Reduced from 1000000
+      impact_threshold: 0.005  # Reduced from 0.01
+      time_window: 3600  # 1 hour
+      confidence_threshold: 0.6  # Reduced from 0.8
+
+# Signal Configuration
+signals:
+  generation:
+    enabled: true
+    update_interval: 60  # seconds
+    min_confidence: 0.4  # Reduced from 0.6
+    max_signals_per_symbol: 3
+
+  filtering:
+    enabled: true
+    correlation_threshold: 0.7
+    volatility_filter: true
+    volume_filter: true
+    time_filter: true
+
+  execution:
+    enabled: true
+    delay: 5  # seconds delay before execution
+    retry_attempts: 3
+    retry_delay: 10  # seconds
+
+# Portfolio Management
+portfolio:
+  # Portfolio constraints
+  max_positions: 5
+  min_position_weight: 0.02  # 2% minimum
+  max_position_weight: 0.25  # 25% maximum
+  target_volatility: 0.12  # 12% target volatility
+  risk_aversion: 1.5
+  correlation_penalty: 0.3
+  expected_return_boost: 1.1
+  
+  # Correlation and exposure guardrails
+  max_correlation: 0.6  # 60% maximum correlation between positions
+  max_portfolio_risk: 0.03  # 3% maximum portfolio risk budget
+  
+  # Sector caps (percentage of max positions allowed per sector)
+  sector_caps:
+    "layer1": 0.4  # Max 40% of positions can be layer 1 blockchains
+    "defi": 0.3    # Max 30% of positions can be DeFi tokens
+    "meme": 0.2    # Max 20% of positions can be meme coins
+    "stablecoin": 0.1  # Max 10% of positions can be stablecoins
+  
+  # Asset to sector mapping
+  asset_sectors:
+    "BTC/USDT": "layer1"
+    "ETH/USDT": "layer1"
+    "BNB/USDT": "layer1"
+    "ADA/USDT": "layer1"
+    "SOL/USDT": "layer1"
+    "DOT/USDT": "layer1"
+    "AVAX/USDT": "layer1"
+    "MATIC/USDT": "layer1"
+    "LINK/USDT": "defi"
+    "UNI/USDT": "defi"
+    "AAVE/USDT": "defi"
+    "COMP/USDT": "defi"
+    "SUSHI/USDT": "defi"
+    "DOGE/USDT": "meme"
+    "SHIB/USDT": "meme"
+    "PEPE/USDT": "meme"
+    "USDT/USD": "stablecoin"
+    "USDC/USD": "stablecoin"
+    "DAI/USD": "stablecoin"
+
+  rebalancing:
+    enabled: true
+    interval: 3600  # 1 hour
+    threshold: 0.05  # 5% deviation threshold
+
+  diversification:
+    enabled: true
+    max_correlation: 0.7
+    sector_allocation:
+      crypto: 0.8
+      stablecoins: 0.2
+
+  performance_tracking:
+    enabled: true
+    metrics:
+      - "sharpe_ratio"
+      - "sortino_ratio"
+      - "calmar_ratio"
+      - "max_drawdown"
+      - "win_rate"
+      - "profit_factor"
+
+# Execution Configuration
+execution:
+  order_type: "market"  # market, limit, stop
+  slippage_tolerance: 0.001  # 0.1%
+  max_retries: 3
+  retry_delay: 5  # seconds
+  timeout: 30  # seconds
+
+  # Order management
+  order_management:
+    enabled: true
+    auto_cancel: true
+    cancel_timeout: 300  # 5 minutes
+    partial_fills: true
+
+  # Slippage control
+  slippage_control:
+    enabled: true
+    max_slippage: 0.002  # 0.2%
+    dynamic_sizing: true
+
+# State Persistence Configuration
+state:
+  db_path: "trading_state.db"
+  backup_enabled: true
+  backup_interval: 3600  # 1 hour in seconds
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  file: "logs/crypto_mvp.log"
+  rotation: "1 week"
+  retention: "1 month"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+  # Logging modules
+  modules:
+    trading: "INFO"
+    risk: "INFO"
+    execution: "INFO"
+    data: "WARNING"
+    strategies: "INFO"
+    portfolio: "INFO"
+
+  # Performance logging
+  performance:
+    enabled: true
+    file: "logs/performance.log"
+    rotation: "1 day"
+    metrics:
+      - "trades"
+      - "profits"
+      - "drawdowns"
+      - "signals"
+
+# Database Configuration
+database:
+  type: "sqlite"  # sqlite, postgresql, mysql
+  url: "sqlite:///crypto_mvp.db"
+  pool_size: 10
+  max_overflow: 20
+  echo: false
+
+  # Tables
+  tables:
+    trades: true
+    signals: true
+    performance: true
+    logs: true
+
+# Redis Configuration (for caching)
+redis:
+  enabled: true
+  host: "localhost"
+  port: 6379
+  db: 0
+  password: null
+  timeout: 5
+
+  # Cache settings
+  cache:
+    market_data: 60  # seconds
+    indicators: 300  # 5 minutes
+    sentiment: 600  # 10 minutes
+    on_chain: 1800  # 30 minutes
+
+# Monitoring and Alerts
+monitoring:
+  enabled: true
+  health_check_interval: 300  # 5 minutes
+
+  # Alerts
+  alerts:
+    email:
+      enabled: false
+      smtp_server: "smtp.gmail.com"
+      smtp_port: 587
+      username: "your_email@gmail.com"
+      password: "your_app_password"
+      recipients:
+        - "admin@example.com"
+
+    telegram:
+      enabled: false
+      bot_token: "your_telegram_bot_token"
+      chat_id: "your_chat_id"
+
+    discord:
+      enabled: false
+      webhook_url: "your_discord_webhook_url"
+
+  # Alert conditions
+  conditions:
+    max_drawdown_exceeded: true
+    daily_loss_limit_exceeded: true
+    connection_lost: true
+    strategy_error: true
+    execution_failed: true
+
+# Development and Testing
+development:
+  debug: false
+  test_mode: true
+  paper_trading: true
+  simulation:
+    enabled: true
+    start_balance: 10000
+    commission: 0.001  # 0.1%
+    slippage: 0.0005  # 0.05%
+
+  # Backtesting
+  backtesting:
+    enabled: true
+    start_date: "2023-01-01"
+    end_date: "2024-01-01"
+    initial_balance: 10000
+    commission: 0.001
+
+# API Configuration
+api:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8000
+  debug: false
+
+  # Authentication
+  auth:
+    enabled: false
+    secret_key: "your_secret_key_here"
+    token_expiry: 3600  # 1 hour
+
+  # Rate limiting
+  rate_limit:
+    enabled: true
+    requests_per_minute: 60
+    burst_size: 10
+
+# Environment Variables (will be replaced at runtime)
+environment:
+  # API Keys (set these in your .env file)
+  BINANCE_API_KEY: "${BINANCE_API_KEY}"
+  BINANCE_SECRET: "${BINANCE_SECRET}"
+  COINBASE_API_KEY: "${COINBASE_API_KEY}"
+  COINBASE_SECRET: "${COINBASE_SECRET}"
+  TWITTER_API_KEY: "${TWITTER_API_KEY}"
+  REDDIT_API_KEY: "${REDDIT_API_KEY}"
+  NEWS_API_KEY: "${NEWS_API_KEY}"
+  WHALE_ALERT_API_KEY: "${WHALE_ALERT_API_KEY}"
+  GLASSNODE_API_KEY: "${GLASSNODE_API_KEY}"
+
+  # Database
+  DATABASE_URL: "${DATABASE_URL:-sqlite:///crypto_mvp.db}"
+
+  # Redis
+  REDIS_HOST: "${REDIS_HOST:-localhost}"
+  REDIS_PORT: "${REDIS_PORT:-6379}"
+  REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+
+  # Logging
+  LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+  LOG_FILE: "${LOG_FILE:-logs/crypto_mvp.log}"

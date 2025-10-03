@@ -1,0 +1,71 @@
+# Pre-commit hooks configuration for Crypto MVP
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+
+repos:
+  # Basic file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+        description: Remove trailing whitespace
+      - id: end-of-file-fixer
+        description: Ensure files end with a newline
+      - id: check-yaml
+        description: Check YAML files for syntax errors
+      - id: check-json
+        description: Check JSON files for syntax errors
+      - id: check-toml
+        description: Check TOML files for syntax errors
+      - id: check-merge-conflict
+        description: Check for merge conflict markers
+      - id: check-added-large-files
+        description: Check for large files being added
+        args: ['--maxkb=1000']
+      - id: check-case-conflict
+        description: Check for case conflicts in filenames
+      - id: debug-statements
+        description: Check for debug statements (pdb, ipdb, etc.)
+      - id: check-docstring-first
+        description: Check that docstrings appear before code
+
+  # Python code formatting with Black
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
+    hooks:
+      - id: black
+        description: Format Python code with Black
+        language_version: python3
+        args: ['--line-length=88', '--target-version=py310']
+
+  # Python import sorting with isort
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        description: Sort Python imports
+        args: ['--profile', 'black', '--line-length', '88']
+
+  # Python linting with Ruff (basic checks only)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.8
+    hooks:
+      - id: ruff
+        description: Lint Python code with Ruff
+        args: ['--fix', '--exit-non-zero-on-fix', '--select', 'E9,F63,F7,F82']
+        exclude: '^tests/'
+      - id: ruff-format
+        description: Format Python code with Ruff
+
+# Configuration for specific hooks
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit.com hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: []
+  submodules: false

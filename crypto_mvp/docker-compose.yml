@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  crypto-mvp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crypto-mvp
+    environment:
+      - PYTHONPATH=/app/src
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./logs:/app/logs
+      - ./config:/app/config:ro
+    ports:
+      - "8000:8000"  # Metrics server
+    command: ["python", "-m", "crypto_mvp", "--once"]
+    restart: "no"
+
+  crypto-mvp-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crypto-mvp-dev
+    environment:
+      - PYTHONPATH=/app/src
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"  # Metrics server
+    command: ["tail", "-f", "/dev/null"]  # Keep container running for development
+    stdin_open: true
+    tty: true
+    restart: "no"
