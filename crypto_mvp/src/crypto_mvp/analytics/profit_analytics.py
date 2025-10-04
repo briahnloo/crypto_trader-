@@ -46,53 +46,124 @@ class ProfitAnalytics(LoggerMixin):
         # File storage
         self.log_file = self.config.get("log_file", "trade_log.json")
         self.auto_save = self.config.get("auto_save", True)
+        
+        # Session tracking
+        self.session_id = None
 
         self.initialized = False
 
-    def initialize(self) -> None:
-        """Initialize the profit analytics system."""
+    def initialize(self, session_id: Optional[str] = None) -> None:
+        """Initialize the profit analytics system for a specific session.
+        
+        Args:
+            session_id: Session identifier for session-scoped analytics
+        """
         if self.initialized:
             self.logger.info("ProfitAnalytics already initialized")
             return
 
+        self.session_id = session_id
         self.logger.info("Initializing ProfitAnalytics")
-        self.logger.info(f"Initial capital: ${self.initial_capital:,.2f}")
+        
+        # Reset analytics for new session
+        if session_id:
+            # Use actual session capital from config instead of default
+            session_capital = self.config.get("initial_capital", self.initial_capital)
+            self.initial_capital = session_capital
+            self.current_equity = session_capital
+            self.peak_equity = session_capital
+            
+            # Reset performance tracking for new session
+            self.total_trades = 0
+            self.winning_trades = 0
+            self.losing_trades = 0
+            self.total_pnl = 0.0
+            self.max_drawdown = 0.0
+            self.current_drawdown = 0.0
+            
+            self.logger.info(f"Session ID: {session_id}")
+            self.logger.info(f"Session initial capital: ${self.initial_capital:,.2f}")
+            self.log_file = f"profit_logs_{session_id}.json"
+        else:
+            self.logger.info(f"Initial capital: ${self.initial_capital:,.2f}")
+            self.log_file = self.config.get("log_file", "profit_logs.json")
+        
         self.logger.info(f"Log file: {self.log_file}")
 
-        # Load existing trade log if available
+        # Load existing trade log if available (session-scoped)
         self._load_trade_log()
 
         self.initialized = True
 
-    def log_trade(
-        self,
-        symbol: str,
-        strategy: str,
-        side: str,
-        quantity: float,
-        entry_price: float,
-        exit_price: float,
-        fees: float,
-        timestamp: Optional[datetime] = None,
-        metadata: Optional[dict[str, Any]] = None,
-    ) -> None:
-        """Log a completed trade.
+    def log_trade(self, trade: dict[str, Any]) -> None:
+        """Log a completed trade from trade dictionary.
 
         Args:
-            symbol: Trading symbol
-            strategy: Strategy name
-            side: Trade side ('buy' or 'sell')
-            quantity: Trade quantity
-            entry_price: Entry price
-            exit_price: Exit price
-            fees: Trading fees
-            timestamp: Trade timestamp (optional)
-            metadata: Additional trade metadata (optional)
+            trade: Trade dictionary with required keys
         """
         if not self.initialized:
             self.initialize()
 
-        timestamp = timestamp or datetime.now()
+        # Validate trade is a dictionary
+        if not isinstance(trade, dict):
+            self.logger.warning(f"log_trade received non-dict trade: {type(trade)}")
+            return
+
+        # Validate and extract required fields with safe defaults
+        try:
+            # Coerce missing numerics to 0.0 and strings to ""
+            symbol = str(trade.get("symbol", "UNKNOWN")) if trade.get("symbol") is not None else "UNKNOWN"
+            strategy = str(trade.get("strategy", "unknown")) if trade.get("strategy") is not None else "unknown"
+            side = str(trade.get("side", "buy")) if trade.get("side") is not None else "buy"
+            
+            # Safe numeric coercion with fallback to 0.0
+            quantity = 0.0
+            try:
+                quantity = float(trade.get("quantity", 0.0))
+            except (ValueError, TypeError):
+                quantity = 0.0
+                
+            entry_price = 0.0
+            try:
+                entry_price = float(trade.get("entry_price", 0.0))
+            except (ValueError, TypeError):
+                entry_price = 0.0
+                
+            exit_price = 0.0
+            try:
+                exit_price = float(trade.get("exit_price", 0.0))
+            except (ValueError, TypeError):
+                exit_price = 0.0
+                
+            fees = 0.0
+            try:
+                fees = float(trade.get("fees", 0.0))
+            except (ValueError, TypeError):
+                fees = 0.0
+            
+            timestamp = trade.get("timestamp", datetime.now())
+            
+            # Handle timestamp conversion
+            if isinstance(timestamp, str):
+                try:
+                    timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                except (ValueError, TypeError):
+                    timestamp = datetime.now()
+            elif not isinstance(timestamp, datetime):
+                timestamp = datetime.now()
+                
+            metadata = trade.get("metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            
+            # Extract pilot flag
+            pilot = trade.get("pilot", False)
+            if not isinstance(pilot, bool):
+                pilot = False
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to parse trade fields: {e}")
+            return
 
         # Calculate PnL
         if side.lower() == "buy":
@@ -115,7 +186,8 @@ class ProfitAnalytics(LoggerMixin):
             "pnl": pnl,
             "timestamp": timestamp.isoformat(),
             "date": timestamp.date().isoformat(),
-            "metadata": metadata or {},
+            "pilot": pilot,
+            "metadata": metadata,
         }
 
         # Add to trade log
@@ -224,18 +296,18 @@ class ProfitAnalytics(LoggerMixin):
                 strategy_metrics["winning_trades"] / strategy_metrics["total_trades"]
             )
 
-        # Calculate average win/loss
-        if strategy_metrics["winning_trades"] > 0:
+        # Calculate average win/loss - guard with if trades:
+        if strategy_metrics["winning_trades"] > 0 and strategy_metrics["trades"]:
             total_wins = sum(
-                t["pnl"] for t in strategy_metrics["trades"] if t["pnl"] > 0
+                t.get("pnl", 0.0) for t in strategy_metrics["trades"] if t.get("pnl", 0.0) > 0
             )
             strategy_metrics["avg_win"] = (
                 total_wins / strategy_metrics["winning_trades"]
             )
 
-        if strategy_metrics["losing_trades"] > 0:
+        if strategy_metrics["losing_trades"] > 0 and strategy_metrics["trades"]:
             total_losses = sum(
-                abs(t["pnl"]) for t in strategy_metrics["trades"] if t["pnl"] < 0
+                abs(t.get("pnl", 0.0)) for t in strategy_metrics["trades"] if t.get("pnl", 0.0) < 0
             )
             strategy_metrics["avg_loss"] = (
                 total_losses / strategy_metrics["losing_trades"]
@@ -275,7 +347,9 @@ class ProfitAnalytics(LoggerMixin):
         max_dd = 0.0
 
         for trade in self.trade_log:
-            current_equity += trade["pnl"]
+            # Guard with safe pnl extraction
+            pnl = trade.get("pnl", 0.0) if trade.get("pnl") is not None else 0.0
+            current_equity += pnl
             equity_curve.append(current_equity)
 
             if current_equity > peak_equity:
@@ -331,11 +405,11 @@ class ProfitAnalytics(LoggerMixin):
             return 0.0
 
         trades = self.strategy_performance[strategy]["trades"]
-        if len(trades) < 2:
+        if not trades or len(trades) < 2:
             return 0.0
 
-        # Calculate returns
-        returns = [trade["pnl"] for trade in trades]
+        # Calculate returns - guard with if trades:
+        returns = [trade.get("pnl", 0.0) for trade in trades if trade.get("pnl") is not None]
 
         if not returns:
             return 0.0
@@ -364,11 +438,11 @@ class ProfitAnalytics(LoggerMixin):
             return 0.0
 
         trades = self.strategy_performance[strategy]["trades"]
-        if len(trades) < 2:
+        if not trades or len(trades) < 2:
             return 0.0
 
-        # Calculate returns
-        returns = [trade["pnl"] for trade in trades]
+        # Calculate returns - guard with if trades:
+        returns = [trade.get("pnl", 0.0) for trade in trades if trade.get("pnl") is not None]
 
         if not returns:
             return 0.0
@@ -392,8 +466,12 @@ class ProfitAnalytics(LoggerMixin):
         sortino = (avg_return - risk_free_rate) / downside_deviation
         return sortino
 
-    def generate_profit_report(self) -> dict[str, Any]:
+    def generate_profit_report(self, state_store=None, session_id=None) -> dict[str, Any]:
         """Generate comprehensive profit report.
+
+        Args:
+            state_store: Optional state store to read trades from
+            session_id: Optional session ID to filter trades
 
         Returns:
             Profit report dictionary matching MVP keys
@@ -401,16 +479,87 @@ class ProfitAnalytics(LoggerMixin):
         if not self.initialized:
             self.initialize()
 
-        # Calculate key metrics
+        # Try to read trades from state store if provided
+        trades = []
+        if state_store and session_id:
+            try:
+                # Read trades from state store for the session
+                state_trades = state_store.get_trades()
+                
+                # Filter by session and convert to analytics format
+                from datetime import datetime, timezone
+                import pytz
+                
+                # Get current date in UTC for filtering
+                current_date = datetime.now(timezone.utc).date()
+                
+                for trade in state_trades:
+                    if trade.get('session_id') == session_id:
+                        # Parse trade timestamp and filter by date
+                        executed_at = trade.get('executed_at')
+                        if executed_at:
+                            try:
+                                if isinstance(executed_at, str):
+                                    trade_datetime = datetime.fromisoformat(executed_at.replace('Z', '+00:00'))
+                                else:
+                                    trade_datetime = executed_at
+                                
+                                # Ensure timezone awareness
+                                if trade_datetime.tzinfo is None:
+                                    trade_datetime = trade_datetime.replace(tzinfo=timezone.utc)
+                                
+                                trade_date = trade_datetime.date()
+                                
+                                # Only include trades from current date
+                                if trade_date == current_date:
+                                    # Convert state store trade format to analytics format
+                                    analytics_trade = {
+                                        'symbol': trade.get('symbol'),
+                                        'strategy': trade.get('strategy', 'unknown'),
+                                        'side': trade.get('side'),
+                                        'quantity': trade.get('quantity', 0.0),
+                                        'entry_price': trade.get('price', 0.0),
+                                        'exit_price': trade.get('price', 0.0),  # Use same price for now
+                                        'fees': trade.get('fees', 0.0),
+                                        'pnl': trade.get('realized_pnl', 0.0),
+                                        'timestamp': trade_datetime.isoformat(),
+                                        'date': trade_date.isoformat(),
+                                        'pilot': False,
+                                        'metadata': {}
+                                    }
+                                    trades.append(analytics_trade)
+                            except Exception as e:
+                                self.logger.warning(f"Failed to parse trade timestamp {executed_at}: {e}")
+                                continue
+                
+                self.logger.info(f"summary_src=ledger entries={len(trades)} for date={current_date} tz=UTC session={session_id}")
+                
+            except Exception as e:
+                self.logger.warning(f"Failed to read trades from state store: {e}, using trade_log")
+                trades = self.trade_log
+        else:
+            trades = self.trade_log
+
+        # Handle empty trades case - return all zeros and empty dicts
+        if not trades:
+            return self._generate_empty_report()
+
+        # Guard all aggregates with if trades: checks
+        
+        # Calculate key metrics with safe handling
         win_rate = (
             self.winning_trades / self.total_trades if self.total_trades > 0 else 0.0
         )
 
-        # Calculate profit factor
-        total_wins = sum(trade["pnl"] for trade in self.trade_log if trade["pnl"] > 0)
-        total_losses = sum(
-            abs(trade["pnl"]) for trade in self.trade_log if trade["pnl"] < 0
-        )
+        # Calculate profit factor with safe handling - guard with if trades:
+        total_wins = 0.0
+        total_losses = 0.0
+        if trades:
+            total_wins = sum(trade.get("pnl", 0.0) for trade in trades if trade.get("pnl", 0.0) > 0)
+            total_losses = sum(
+                abs(trade.get("pnl", 0.0)) for trade in trades if trade.get("pnl", 0.0) < 0
+            )
+        
         profit_factor = (
             total_wins / total_losses
             if total_losses > 0
@@ -419,7 +568,7 @@ class ProfitAnalytics(LoggerMixin):
             else 0.0
         )
 
-        # Calculate average win/loss
+        # Calculate average win/loss with safe handling - guard with if trades:
         avg_win = total_wins / self.winning_trades if self.winning_trades > 0 else 0.0
         avg_loss = total_losses / self.losing_trades if self.losing_trades > 0 else 0.0
 
@@ -439,6 +588,29 @@ class ProfitAnalytics(LoggerMixin):
         # Calculate max drawdown
         max_drawdown = self._calculate_max_drawdown()
 
+        # Calculate max/min trades with guards
+        max_win = 0.0
+        max_loss = 0.0
+        total_fees = 0.0
+        total_trade_volume = 0.0
+        best_trade = None
+        worst_trade = None
+        
+        if trades:
+            max_win = max(trade.get("pnl", 0.0) for trade in trades)
+            max_loss = min(trade.get("pnl", 0.0) for trade in trades)
+            total_fees = sum(trade.get("fees", 0.0) for trade in trades)
+            total_trade_volume = sum(
+                trade.get("quantity", 0.0) * trade.get("entry_price", 0.0) for trade in trades
+            )
+            best_trade = max(trades, key=lambda x: x.get("pnl", 0.0))
+            worst_trade = min(trades, key=lambda x: x.get("pnl", 0.0))
+
+        # Calculate daily metrics with guards
+        avg_daily_pnl = 0.0
+        if self.daily_pnl:
+            avg_daily_pnl = sum(self.daily_pnl.values()) / len(self.daily_pnl)
+
         # Generate report
         report = {
             # Core metrics
@@ -453,12 +625,8 @@ class ProfitAnalytics(LoggerMixin):
             "total_return": total_return,
             "avg_win": avg_win,
             "avg_loss": avg_loss,
-            "max_win": max(trade["pnl"] for trade in self.trade_log)
-            if self.trade_log
-            else 0.0,
-            "max_loss": min(trade["pnl"] for trade in self.trade_log)
-            if self.trade_log
-            else 0.0,
+            "max_win": max_win,
+            "max_loss": max_loss,
             # Risk metrics
             "sharpe_ratio": sharpe_ratio,
             "sortino_ratio": self._calculate_overall_sortino_ratio(),
@@ -467,29 +635,21 @@ class ProfitAnalytics(LoggerMixin):
             "current_equity": self.current_equity,
             # Capital metrics
             "initial_capital": self.initial_capital,
-            "total_fees": sum(trade["fees"] for trade in self.trade_log),
+            "total_fees": total_fees,
             # Strategy breakdown
             "strategy_performance": strategy_performance,
             # Time-based metrics
             "daily_pnl": self.daily_pnl,
             "trading_days": len(self.daily_pnl),
-            "avg_daily_pnl": sum(self.daily_pnl.values()) / len(self.daily_pnl)
-            if self.daily_pnl
-            else 0.0,
+            "avg_daily_pnl": avg_daily_pnl,
             # Additional metrics
-            "best_trade": max(self.trade_log, key=lambda x: x["pnl"])
-            if self.trade_log
-            else None,
-            "worst_trade": min(self.trade_log, key=lambda x: x["pnl"])
-            if self.trade_log
-            else None,
+            "best_trade": best_trade,
+            "worst_trade": worst_trade,
             "consecutive_wins": self._calculate_consecutive_wins(),
             "consecutive_losses": self._calculate_consecutive_losses(),
             # Metadata
             "report_timestamp": datetime.now().isoformat(),
-            "total_trade_volume": sum(
-                trade["quantity"] * trade["entry_price"] for trade in self.trade_log
-            ),
+            "total_trade_volume": total_trade_volume,
         }
 
         return report
@@ -500,10 +660,15 @@ class ProfitAnalytics(LoggerMixin):
         Returns:
             Sharpe ratio
         """
-        if len(self.trade_log) < 2:
+        if not self.trade_log or len(self.trade_log) < 2:
             return 0.0
 
-        returns = [trade["pnl"] for trade in self.trade_log]
+        # Guard with if trades:
+        returns = [trade.get("pnl", 0.0) for trade in self.trade_log if trade.get("pnl") is not None]
+        
+        if not returns:
+            return 0.0
+            
         risk_free_rate = 0.02 / 252  # Daily risk-free rate
         avg_return = sum(returns) / len(returns)
         std_return = (sum((r - avg_return) ** 2 for r in returns) / len(returns)) ** 0.5
@@ -519,10 +684,15 @@ class ProfitAnalytics(LoggerMixin):
         Returns:
             Sortino ratio
         """
-        if len(self.trade_log) < 2:
+        if not self.trade_log or len(self.trade_log) < 2:
             return 0.0
 
-        returns = [trade["pnl"] for trade in self.trade_log]
+        # Guard with if trades:
+        returns = [trade.get("pnl", 0.0) for trade in self.trade_log if trade.get("pnl") is not None]
+        
+        if not returns:
+            return 0.0
+            
         risk_free_rate = 0.02 / 252  # Daily risk-free rate
         avg_return = sum(returns) / len(returns)
 
@@ -546,11 +716,12 @@ class ProfitAnalytics(LoggerMixin):
             Number of consecutive wins
         """
         consecutive = 0
-        for trade in reversed(self.trade_log):
-            if trade["pnl"] > 0:
-                consecutive += 1
-            else:
-                break
+        if self.trade_log:
+            for trade in reversed(self.trade_log):
+                if trade.get("pnl", 0.0) > 0:
+                    consecutive += 1
+                else:
+                    break
         return consecutive
 
     def _calculate_consecutive_losses(self) -> int:
@@ -560,11 +731,12 @@ class ProfitAnalytics(LoggerMixin):
             Number of consecutive losses
         """
         consecutive = 0
-        for trade in reversed(self.trade_log):
-            if trade["pnl"] < 0:
-                consecutive += 1
-            else:
-                break
+        if self.trade_log:
+            for trade in reversed(self.trade_log):
+                if trade.get("pnl", 0.0) < 0:
+                    consecutive += 1
+                else:
+                    break
         return consecutive
 
     def _save_trade_log(self) -> None:
@@ -651,3 +823,80 @@ class ProfitAnalytics(LoggerMixin):
         self.peak_equity = self.initial_capital
 
         self.logger.info("All trade data cleared")
+
+    def update_equity_from_session(self, session_cash: float, positions: dict[str, dict[str, Any]]) -> None:
+        """Update equity from session cash and mark-to-market positions.
+        
+        Args:
+            session_cash: Current session cash balance
+            positions: Current positions with mark-to-market values
+        """
+        # Calculate mark-to-market value of positions
+        mtm_value = 0.0
+        for symbol, position in positions.items():
+            quantity = position.get("quantity", 0.0)
+            current_price = position.get("current_price", 0.0)
+            mtm_value += quantity * current_price
+        
+        # Update equity as cash + mark-to-market
+        self.current_equity = session_cash + mtm_value
+        
+        # Update peak equity if current is higher
+        if self.current_equity > self.peak_equity:
+            self.peak_equity = self.current_equity
+            
+        self.logger.debug(f"Updated equity from session: cash=${session_cash:.2f}, mtm=${mtm_value:.2f}, total=${self.current_equity:.2f}")
+
+    def _generate_empty_report(self) -> dict[str, Any]:
+        """Generate a zeroed report for empty trade sessions.
+        
+        Returns:
+            Empty report dictionary with all metrics set to safe defaults
+        """
+        return {
+            # Core metrics - all zeroed
+            "total_trades": 0,
+            "winning_trades": 0,
+            "losing_trades": 0,
+            "win_rate": 0.0,
+            "profit_factor": 0.0,
+            "max_drawdown": 0.0,
+            # PnL metrics - all zeroed
+            "total_pnl": 0.0,
+            "total_return": 0.0,
+            "avg_win": 0.0,
+            "avg_loss": 0.0,
+            "max_win": 0.0,
+            "max_loss": 0.0,
+            # Risk metrics - all zeroed
+            "sharpe_ratio": 0.0,
+            "sortino_ratio": 0.0,
+            "current_drawdown": 0.0,
+            "peak_equity": self.peak_equity,
+            "current_equity": self.current_equity,
+            # Capital metrics
+            "initial_capital": self.initial_capital,
+            "total_fees": 0.0,
+            # Strategy breakdown - empty
+            "strategy_performance": {},
+            # Time-based metrics - all zeroed
+            "daily_pnl": {},
+            "trading_days": 0,
+            "avg_daily_pnl": 0.0,
+            # Additional metrics - all None/zeroed
+            "best_trade": None,
+            "worst_trade": None,
+            "consecutive_wins": 0,
+            "consecutive_losses": 0,
+            # Metadata
+            "report_timestamp": datetime.now().isoformat(),
+            "total_trade_volume": 0.0,
+        }
+
+    def reset_daily_counters(self) -> None:
+        """Reset daily counters while preserving session data."""
+        # Reset daily PnL tracking
+        self.daily_pnl.clear()
+        
+        # Reset daily counters but keep session totals
+        self.logger.info("Daily counters reset - session totals preserved")

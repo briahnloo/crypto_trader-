@@ -21,7 +21,7 @@ trading:
   trade_timeout: 3600  # 1 hour in seconds
   min_confidence: 0.4  # Reduced from 0.6 to 0.4 for more opportunities
   min_signal_score: 0.15  # Reduced from 0.3 to 0.15 for more trades
-  cycle_interval: 300  # Time between trading cycles in seconds (5 minutes)
+  cycle_interval: 60  # Time between trading cycles in seconds (60 seconds)
   initial_capital: 10000  # Starting capital for trading
   live_mode: false  # Live trading mode (false for paper trading)
   dry_run: false  # Dry run mode (false to allow simulated trades)
@@ -33,13 +33,29 @@ risk:
   stop_loss: 0.02  # 2% stop loss
   take_profit: 0.04  # 4% take profit
   position_sizing:
-    method: "fixed_risk"  # fixed_risk, fixed_size, kelly_criterion
-    risk_per_trade: 0.01  # 1% risk per trade
-    max_position_size: 0.1  # 10% max position size
+    method: "risk_based"  # risk_based, fixed_risk, fixed_size, kelly_criterion
+    risk_per_trade_pct: 0.25  # 0.25% of equity per trade
+    max_notional_pct: 1.0  # 1.0% max notional of equity
+    risk_per_trade: 0.01  # 1% risk per trade (legacy)
+    max_position_size: 0.1  # 10% max position size (legacy)
   daily_loss_limit: 0.03  # 3% daily loss limit
   max_correlation: 0.7  # Maximum correlation between positions
   volatility_adjustment: true
   dynamic_sizing: true
+  
+  # SL/TP derivation configuration
+  sl_tp:
+    atr_mult_sl: 1.2          # ATR multiplier for stop loss
+    atr_mult_tp: 2.0          # ATR multiplier for take profit
+    fallback_pct_sl: 0.02     # 2% fallback stop loss
+    fallback_pct_tp: 0.04     # 4% fallback take profit
+    min_sl_abs: 0.001         # absolute guardrail for small-price assets
+    min_tp_abs: 0.002         # absolute guardrail for small-price assets
+  
+  # Risk-Reward and fallback configuration
+  enable_percent_fallback: true  # Enable percent-based SL/TP when ATR fails
+  rr_min: 1.30                   # Minimum risk-reward ratio for regular trades
+  rr_relax_for_pilot: 1.60       # Risk-reward ratio threshold for pilot trades
 
 # Exchange Configuration
 exchanges:
@@ -336,6 +352,9 @@ logging:
       - "profits"
       - "drawdowns"
       - "signals"
+  
+  # SL/TP logging configuration
+  sl_tp_line: true  # Enable detailed SL/TP source logging
 
 # Database Configuration
 database:

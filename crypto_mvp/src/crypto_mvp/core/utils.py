@@ -9,11 +9,85 @@ import time
 from decimal import ROUND_DOWN, Decimal
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Union
+from typing import Any, Callable, Union, Optional
+from contextlib import contextmanager
 
 import aiohttp
 import requests
 from loguru import logger
+
+# Cycle-local cache for debounced mark price logging
+_logged_mark_prices_this_cycle: set = set()
+
+
+# Canonical symbol mapping
+CANONICAL_SYMBOLS = {
+    # Binance format (already canonical)
+    "BTC/USDT": "BTC/USDT",
+    "ETH/USDT": "ETH/USDT",
+    "BNB/USDT": "BNB/USDT",
+    "ADA/USDT": "ADA/USDT",
+    "SOL/USDT": "SOL/USDT",
+    
+    # Coinbase format
+    "BTC-USD": "BTC/USDT",
+    "ETH-USD": "ETH/USDT",
+    "BNB-USD": "BNB/USDT",
+    "ADA-USD": "ADA/USDT",
+    "SOL-USD": "SOL/USDT",
+    
+    # Alternative formats
+    "BTCUSDT": "BTC/USDT",
+    "ETHUSDT": "ETH/USDT",
+    "BNBUSDT": "BNB/USDT",
+    "ADAUSDT": "ADA/USDT",
+    "SOLUSDT": "SOL/USDT",
+}
+
+# Price sanity bands
+PRICE_SANITY_BANDS = {
+    "BTC": {"min": 5000, "max": 500000},
+    "ETH": {"min": 100, "max": 20000},
+    "SOL": {"min": 1, "max": 1000},
+    "ADA": {"min": 0.01, "max": 10},
+    "BNB": {"min": 10, "max": 2000},
+}
+
+
+def to_canonical(symbol: str) -> str:
+    """
+    Convert any symbol format to canonical format (e.g., BTC/USDT).
+    
+    Args:
+        symbol: Symbol in any format (e.g., BTC-USD, BTCUSDT, BTC/USDT)
+    
+    Returns:
+        Canonical symbol format (e.g., BTC/USDT)
+    """
+    if not symbol:
+        raise ValueError("Symbol cannot be empty")
+    
+    # Normalize to uppercase for lookup
+    normalized = symbol.upper().strip()
+    
+    # Check if already canonical
+    if normalized in CANONICAL_SYMBOLS:
+        return CANONICAL_SYMBOLS[normalized]
+    
+    # Try to construct canonical format if not in mapping
+    # Handle formats like BTC-USD -> BTC/USDT
+    if '-' in normalized:
+        base, quote = normalized.split('-', 1)
+        if quote in ['USD', 'USDT']:
+            return f"{base}/USDT"
+    
+    # Handle formats like BTCUSDT -> BTC/USDT
+    if 'USDT' in normalized and '/' not in normalized:
+        base = normalized.replace('USDT', '')
+        return f"{base}/USDT"
+    
+    # If no conversion found, return as-is (assume already canonical)
+    return normalized
 
 
 def get_version() -> str:
@@ -478,3 +552,225 @@ def create_retry_config(
         "backoff_factor": backoff_factor,
         "exceptions": get_connector_exceptions() + get_ccxt_exceptions(),
     }
+
+
+def get_mark_price(
+    symbol: str, 
+    data_engine, 
+    live_mode: bool = False,
+    max_age_seconds: int = 30
+) -> Optional[float]:
+    """
+    Get mark price for a symbol with fallback chain and canonical symbol support.
+    Uses data engine's mark price source priority system.
+    
+    Args:
+        symbol: Trading symbol in any format (e.g., 'BTC/USDT', 'BTC-USD', 'BTCUSDT')
+        data_engine: Data engine instance
+        live_mode: Whether in live trading mode (affects staleness check)
+        max_age_seconds: Maximum age of ticker data in live mode (default 30s)
+    
+    Returns:
+        Mark price as float, or None if no valid price found
+    """
+    if not data_engine:
+        logger.warning(f"No data engine provided for {symbol}")
+        return None
+    
+    try:
+        # Convert to canonical symbol
+        canonical_symbol = to_canonical(symbol)
+        logger.debug(f"Converted {symbol} to canonical {canonical_symbol}")
+        
+        # Check if we have a cached mark price from previous cycle
+        if hasattr(data_engine, 'mark_price_history') and canonical_symbol in data_engine.mark_price_history:
+            cached_price = data_engine.mark_price_history[canonical_symbol]
+            cached_source = data_engine.mark_source_history.get(canonical_symbol, "unknown")
+            
+            # Validate cached price
+            if validate_mark_price(cached_price, canonical_symbol):
+                log_mark_price_debounced(canonical_symbol, cached_price, cached_source, cached=True)
+                return float(cached_price)
+        
+        # Get fresh ticker data using data engine's priority system
+        ticker_data = data_engine.get_ticker(canonical_symbol)
+        
+        if not ticker_data:
+            logger.warning(f"No ticker data available for {canonical_symbol}")
+            return None
+        
+        # Check for stale data in live mode
+        if live_mode:
+            timestamp = ticker_data.get('timestamp')
+            if timestamp:
+                try:
+                    from datetime import datetime, timezone
+                    if isinstance(timestamp, str):
+                        # Parse ISO timestamp
+                        ticker_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    else:
+                        ticker_time = timestamp
+                    
+                    # Check if timestamp is timezone-aware
+                    if ticker_time.tzinfo is None:
+                        ticker_time = ticker_time.replace(tzinfo=timezone.utc)
+                    
+                    age_seconds = (datetime.now(timezone.utc) - ticker_time).total_seconds()
+                    if age_seconds > max_age_seconds:
+                        logger.warning(f"Stale ticker data for {canonical_symbol}: {age_seconds:.1f}s old")
+                        return None
+                        
+                except Exception as e:
+                    logger.warning(f"Could not parse timestamp for {canonical_symbol}: {e}")
+                    # Continue with fallback chain
+        
+        # Mark price source priority: exchange ticker.last → mid(bid/ask) → OHLCV close → coingecko
+        mark_price = None
+        source_name = "unknown"
+        
+        # Step 1: Try 'last' price field (highest priority)
+        if ticker_data.get('last') and ticker_data['last'] > 0:
+            mark_price = ticker_data['last']
+            source_name = "ticker_last"
+            if validate_mark_price(mark_price, canonical_symbol):
+                log_mark_price_debounced(canonical_symbol, mark_price, source_name)
+                return float(mark_price)
+        
+        # Step 2: Try 'price' field (fallback)
+        if ticker_data.get('price') and ticker_data['price'] > 0:
+            mark_price = ticker_data['price']
+            source_name = "ticker_price"
+            if validate_mark_price(mark_price, canonical_symbol):
+                log_mark_price_debounced(canonical_symbol, mark_price, source_name)
+                return float(mark_price)
+        
+        # Step 3: Try mid of best bid/ask
+        bid = ticker_data.get('bid')
+        ask = ticker_data.get('ask')
+        if bid and ask and bid > 0 and ask > 0:
+            mark_price = (bid + ask) / 2
+            source_name = "bid_ask_mid"
+            if validate_mark_price(mark_price, canonical_symbol):
+                log_mark_price_debounced(canonical_symbol, mark_price, source_name)
+                return float(mark_price)
+        
+        # Step 4: Try last OHLCV close
+        try:
+            ohlcv_data = data_engine.get_ohlcv(canonical_symbol, "1h", 1)
+            if ohlcv_data and len(ohlcv_data) > 0:
+                close_price = ohlcv_data[0].get('close')
+                if close_price and close_price > 0:
+                    mark_price = close_price
+                    source_name = "ohlcv_close"
+                    if validate_mark_price(mark_price, canonical_symbol):
+                        log_mark_price_debounced(canonical_symbol, mark_price, source_name)
+                        return float(mark_price)
+        except Exception as e:
+            logger.warning(f"Failed to get OHLCV data for {canonical_symbol}: {e}")
+        
+        # No valid price found
+        logger.warning(f"No valid mark price found for {canonical_symbol}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error getting mark price for {symbol}: {e}")
+        return None
+
+
+def validate_mark_price(price: Optional[float], symbol: str) -> bool:
+    """
+    Validate that a mark price is reasonable using sanity bands.
+    
+    Args:
+        price: Price to validate
+        symbol: Trading symbol for context (can be canonical or any format)
+    
+    Returns:
+        True if price is valid, False otherwise
+    """
+    if price is None:
+        return False
+    
+    if price <= 0:
+        logger.warning(f"Invalid mark price for {symbol}: {price} (must be > 0)")
+        return False
+    
+    # Convert to canonical symbol for lookup
+    canonical_symbol = to_canonical(symbol)
+    
+    # Extract base asset from canonical symbol (e.g., BTC from BTC/USDT)
+    base_asset = canonical_symbol.split('/')[0]
+    
+    # Check sanity bands
+    if base_asset in PRICE_SANITY_BANDS:
+        min_price = PRICE_SANITY_BANDS[base_asset]["min"]
+        max_price = PRICE_SANITY_BANDS[base_asset]["max"]
+        
+        if price < min_price or price > max_price:
+            logger.warning(f"Price out of sanity band for {symbol}: {price} (expected {min_price}-{max_price})")
+            return False
+    
+    return True
+
+
+@contextmanager
+def start_cycle_logging():
+    """
+    Context manager to reset debounced mark price logging for a new cycle.
+    
+    Usage:
+        with start_cycle_logging():
+            # All mark price logging in this block will be debounced
+            get_mark_price(...)
+    """
+    global _logged_mark_prices_this_cycle
+    # Reset the cache for new cycle
+    _logged_mark_prices_this_cycle.clear()
+    try:
+        yield
+    finally:
+        # Clean up after cycle
+        _logged_mark_prices_this_cycle.clear()
+
+
+def _should_log_mark_price(symbol: str, price: float, source: str) -> bool:
+    """
+    Check if mark price should be logged (debounced within cycle).
+    
+    Args:
+        symbol: Trading symbol
+        price: Mark price
+        source: Price source
+        
+    Returns:
+        True if should log, False if should suppress (already logged this cycle)
+    """
+    global _logged_mark_prices_this_cycle
+    
+    # Create cache key
+    cache_key = (symbol, round(price, 2), source)
+    
+    if cache_key in _logged_mark_prices_this_cycle:
+        return False  # Already logged this cycle
+    
+    # Add to cache and allow logging
+    _logged_mark_prices_this_cycle.add(cache_key)
+    return True
+
+
+def log_mark_price_debounced(symbol: str, price: float, source: str, cached: bool = False) -> None:
+    """
+    Log mark price with debouncing to prevent spam within a cycle.
+    
+    Args:
+        symbol: Trading symbol
+        price: Mark price
+        source: Price source
+        cached: Whether this is a cached price
+    """
+    if _should_log_mark_price(symbol, price, source):
+        cache_indicator = " (cached)" if cached else ""
+        logger.info(f"mark_src={source} mark={price:.2f}{cache_indicator}")
+    else:
+        # Still log at debug level to avoid spam but maintain traceability
+        logger.debug(f"mark_src={source} mark={price:.2f} (cached, suppressed)")

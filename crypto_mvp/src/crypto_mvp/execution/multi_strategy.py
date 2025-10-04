@@ -162,6 +162,10 @@ class MultiStrategyExecutor(LoggerMixin):
         # Calculate optimal position size using risk manager
         position_data = {"available_capital": capital, "current_price": current_price}
 
+        # Extract stop loss and take profit from signal if available
+        stop_loss = signal.get("stop_loss")
+        take_profit = signal.get("take_profit")
+        
         risk_result = self.risk_manager.calculate_optimal_position_size(
             symbol=symbol,
             signal_data=signal,
@@ -175,7 +179,7 @@ class MultiStrategyExecutor(LoggerMixin):
             self.logger.info(
                 f"No position size calculated for {symbol} with {strategy_name}"
             )
-            return self._empty_trade_result(strategy_name, signal)
+            return {"status": "rejected", "reason": "risk_rejected"}
 
         # Prepare position data for executor
         position = {
@@ -188,6 +192,23 @@ class MultiStrategyExecutor(LoggerMixin):
         # Execute strategy
         execution_result = executor.execute(signal, position)
 
+        # Apply entry price fallback logic
+        entry_price = execution_result.get("entry_price", 0.0)
+        
+        # Fallback logic: if strategy price is invalid, use market price
+        if entry_price is None or entry_price <= 0:
+            # Get market price as fallback
+            market_price = signal.get("current_price", 0.0)
+            if market_price and market_price > 0:
+                entry_price = market_price
+                execution_result["entry_price"] = entry_price
+                execution_result["price_source"] = "market_fallback"
+                self.logger.debug(f"Using market price fallback for {symbol}: ${entry_price:.2f}")
+            else:
+                # Still invalid - reject before portfolio update
+                self.logger.warning(f"Invalid entry price for {symbol}: strategy={execution_result.get('entry_price')}, market={market_price}")
+                return {"status": "rejected", "reason": "invalid_entry_price"}
+
         # Calculate expected profit
         expected_profit = self._calculate_expected_profit(
             signal, position_size, execution_result
@@ -198,12 +219,11 @@ class MultiStrategyExecutor(LoggerMixin):
             "strategy": strategy_name,
             "symbol": symbol,
             "position_size": position_size,
-            "entry_price": execution_result.get("entry_price", current_price),
+            "entry_price": entry_price,
             "execution_result": execution_result,
             "expected_profit": expected_profit,
             "risk_metrics": risk_result.get("metadata", {}),
-            "capital_used": position_size
-            * execution_result.get("entry_price", current_price),
+            "capital_used": position_size * entry_price,
             "risk_adjusted": risk_result.get("max_risk_respected", False),
         }
 

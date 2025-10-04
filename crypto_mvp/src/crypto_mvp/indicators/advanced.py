@@ -374,6 +374,47 @@ class AdvancedIndicators(LoggerMixin):
             self.logger.error(f"Failed to calculate Ichimoku Cloud: {e}")
             raise
 
+    def calculate_atr(
+        self,
+        high: pd.Series,
+        low: pd.Series,
+        close: pd.Series,
+        period: int = 14,
+    ) -> pd.Series:
+        """Calculate Average True Range (ATR) indicator.
+
+        Args:
+            high: High prices series
+            low: Low prices series
+            close: Close prices series
+            period: ATR period (default 14)
+
+        Returns:
+            ATR values as pandas Series
+        """
+        try:
+            _validate_ohlcv_data(high, low, close)
+
+            # Calculate True Range (TR)
+            high_low = high - low
+            high_close_prev = np.abs(high - close.shift(1))
+            low_close_prev = np.abs(low - close.shift(1))
+            
+            # True Range is the maximum of:
+            # 1. High - Low
+            # 2. |High - Previous Close|
+            # 3. |Low - Previous Close|
+            true_range = np.maximum(high_low, np.maximum(high_close_prev, low_close_prev))
+            
+            # Calculate ATR using Wilder's smoothing (exponential moving average)
+            atr = true_range.ewm(alpha=1.0/period, adjust=False).mean()
+            
+            self.logger.debug(f"Calculated ATR for {len(high)} periods with {period}-period smoothing")
+            return atr
+        except Exception as e:
+            self.logger.error(f"Failed to calculate ATR: {e}")
+            raise
+
     def calculate_volume_profile(
         self,
         high: pd.Series,

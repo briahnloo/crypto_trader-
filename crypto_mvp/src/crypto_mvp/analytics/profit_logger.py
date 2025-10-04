@@ -8,6 +8,7 @@ from typing import Any, Optional
 import pytz
 
 from ..core.logging_utils import LoggerMixin
+from ..core.utils import get_mark_price, validate_mark_price
 
 
 class ProfitLogger(LoggerMixin):
@@ -47,6 +48,9 @@ class ProfitLogger(LoggerMixin):
         self.timezone = self.config.get("timezone", "UTC")
         self.daily_start_equity = self.current_equity
         self.daily_start_time = datetime.now(timezone.utc)
+        
+        # Session tracking
+        self.session_id = None
         self.previous_equity = self.current_equity
         self.last_daily_reset = datetime.now(timezone.utc).date()
         self.daily_trades = 0
@@ -54,21 +58,56 @@ class ProfitLogger(LoggerMixin):
         self.daily_losing_trades = 0
         self.daily_pnl = 0.0
 
+        # Session tracking
+        self.session_start_time = datetime.now(timezone.utc)
+        self.session_start_equity = self.current_equity
+        self.is_continuing_session = False
+        self.session_id = f"session_{int(self.session_start_time.timestamp())}"
+
         self.initialized = False
 
-    def initialize(self) -> None:
-        """Initialize the profit logger."""
+    def initialize(self, session_id: Optional[str] = None) -> None:
+        """Initialize the profit logger for a specific session.
+        
+        Args:
+            session_id: Session identifier for session-scoped logging
+        """
         if self.initialized:
             self.logger.info("ProfitLogger already initialized")
             return
 
+        self.session_id = session_id
         self.logger.info("Initializing ProfitLogger")
         self.logger.info(f"Log level: {self.log_level}")
+        
+        if session_id:
+            # Reset logger state for new session
+            session_initial_equity = self.config.get("initial_equity", 100000.0)
+            self.current_equity = session_initial_equity
+            self.peak_equity = session_initial_equity  # Reset peak to session start
+            self.total_trades = 0
+            self.winning_trades = 0
+            self.losing_trades = 0
+            self.total_pnl = 0.0
+            self.daily_start_equity = session_initial_equity
+            self.daily_start_time = datetime.now(timezone.utc)
+            self.daily_trades = 0
+            self.daily_winning_trades = 0
+            self.daily_losing_trades = 0
+            
+            # Reset session tracking
+            self.session_start_equity = session_initial_equity
+            self.is_continuing_session = False
+            
+            self.log_file = f"profit_logs_{session_id}.json"
+            self.logger.info(f"Session ID: {session_id}")
+            self.logger.info(f"Session initial equity: ${self.current_equity:,.2f}")
+        
         self.logger.info(f"Log file: {self.log_file}")
         self.logger.info(f"Console output: {self.console_output}")
         self.logger.info(f"Emoji enabled: {self.emoji_enabled}")
 
-        # Load existing logs if available
+        # Load existing logs if available (session-scoped)
         self._load_logs()
 
         self.initialized = True
@@ -105,6 +144,10 @@ class ProfitLogger(LoggerMixin):
             self.daily_start_equity = self.current_equity
             self.daily_start_time = current_time
             self.daily_trades = 0
+            
+            # Reset analytics daily counters
+            if hasattr(self, 'profit_analytics') and self.profit_analytics:
+                self.profit_analytics.reset_daily_counters()
             self.daily_winning_trades = 0
             self.daily_losing_trades = 0
             self.daily_pnl = 0.0
@@ -116,6 +159,50 @@ class ProfitLogger(LoggerMixin):
 
     def _generate_daily_summary(self) -> None:
         """Generate and log a daily summary for the previous day."""
+        # Initialize daily_summary_data with safe defaults BEFORE any try/except
+        daily_summary_data = {
+            "date": self.last_daily_reset or "unknown",
+            "timestamp": datetime.now().isoformat(),
+            "session_info": {
+                "session_id": self.session_id or "unknown",
+                "session_start_time": self.session_start_time or datetime.now().isoformat(),
+                "is_continuing_session": self.is_continuing_session,
+                "session_start_equity": self.session_start_equity or 0.0,
+            },
+            "performance": {
+                "win_rate": 0.0,
+                "sharpe_ratio": 0.0,
+                "max_drawdown": 0.0,
+                "total_return": 0.0,
+                "profit_factor": 0.0,
+                "daily_pnl": 0.0,
+                "daily_return": 0.0,
+            },
+            "trading_activity": {
+                "total_trades": 0,
+                "winning_trades": 0,
+                "losing_trades": 0,
+                "total_volume": 0.0,
+                "total_fees": 0.0,
+                "avg_trade_size": 0.0,
+            },
+            "equity": {
+                "start_equity": self.session_start_equity or 0.0,
+                "end_equity": self.current_equity or 0.0,
+                "peak_equity": self.peak_equity or 0.0,
+            },
+            "risk_metrics": {
+                "current_drawdown": 0.0,
+                "volatility": 0.02,
+                "var_95": 0.03,
+            },
+            "strategy_performance": {},
+            "metadata": {
+                "timezone": self.timezone,
+                "rollover_type": "error_fallback",
+            },
+        }
+        
         try:
             # Calculate daily metrics
             daily_return = (self.current_equity - self.daily_start_equity) / self.daily_start_equity * 100 if self.daily_start_equity > 0 else 0.0
@@ -140,16 +227,24 @@ class ProfitLogger(LoggerMixin):
             if self.daily_start_equity > 0:
                 daily_max_drawdown = max(0.0, (self.peak_equity - self.current_equity) / self.peak_equity)
             
-            # Create daily summary data
-            daily_data = {
+            # Update daily_summary_data with calculated values
+            daily_summary_data.update({
                 "date": self.last_daily_reset,
                 "timestamp": self.daily_start_time,
+                "session_info": {
+                    "session_id": self.session_id,
+                    "session_start_time": self.session_start_time,
+                    "is_continuing_session": self.is_continuing_session,
+                    "session_start_equity": self.session_start_equity,
+                },
                 "performance": {
                     "win_rate": daily_win_rate,
                     "sharpe_ratio": daily_sharpe,
                     "max_drawdown": daily_max_drawdown,
                     "total_return": daily_return / 100.0,  # Convert percentage to decimal
                     "profit_factor": daily_profit_factor,
+                    "daily_pnl": self.daily_pnl,
+                    "daily_return": daily_return,
                 },
                 "trading_activity": {
                     "total_trades": self.daily_trades,
@@ -157,11 +252,12 @@ class ProfitLogger(LoggerMixin):
                     "losing_trades": self.daily_losing_trades,
                     "total_volume": 0.0,  # Would need to track this separately
                     "total_fees": 0.0,    # Would need to track this separately
+                    "avg_trade_size": 0.0,
                 },
                 "equity": {
                     "start_equity": self.daily_start_equity,
                     "end_equity": self.current_equity,
-                    "peak_equity": self.peak_equity,
+                    "peak_equity": self.peak_equity if self.is_continuing_session else self.current_equity,
                 },
                 "risk_metrics": {
                     "current_drawdown": daily_max_drawdown,
@@ -173,13 +269,17 @@ class ProfitLogger(LoggerMixin):
                     "timezone": self.timezone,
                     "rollover_type": "automatic",
                 },
-            }
-            
-            # Log the daily summary
-            self.log_daily_summary(daily_data)
+            })
             
         except Exception as e:
             self.logger.error(f"Failed to generate daily summary: {e}")
+            # daily_summary_data already has safe defaults, keep them
+        
+        # Always try to log the summary data (either calculated or fallback)
+        try:
+            self.log_daily_summary(daily_summary_data)
+        except Exception as log_error:
+            self.logger.error(f"Failed to log daily summary: {log_error}")
 
     def log_trading_cycle(self, cycle_data: dict[str, Any]) -> None:
         """Log a complete trading cycle with comprehensive data.
@@ -214,7 +314,8 @@ class ProfitLogger(LoggerMixin):
 
         # Position data
         positions = cycle_data.get("positions", {})
-        position_count = len(positions)
+        # Only count positions with non-zero quantity
+        position_count = len([pos for pos in positions.values() if abs(pos.get("quantity", 0)) > 1e-8])
         total_position_value = sum(pos.get("value", 0) for pos in positions.values())
 
         # Decision data
@@ -436,9 +537,16 @@ class ProfitLogger(LoggerMixin):
 
         if self.detailed_logging and positions["details"]:
             for symbol, pos in positions["details"].items():
-                print(
-                    f"   📊 {symbol}: {pos.get('quantity', 0):.4f} @ ${pos.get('price', 0):.2f}"
-                )
+                # Try to get live mark price for display
+                mark_price = pos.get('current_price', pos.get('price', 0))
+                if mark_price and mark_price > 0:
+                    print(
+                        f"   📊 {symbol}: {pos.get('quantity', 0):.4f} @ ${mark_price:.2f}"
+                    )
+                else:
+                    print(
+                        f"   📊 {symbol}: {pos.get('quantity', 0):.4f} @ N/A (no valid price)"
+                    )
 
         # Decisions section
         decisions = cycle_log["decisions"]
@@ -495,7 +603,11 @@ class ProfitLogger(LoggerMixin):
             return
 
         print("\n" + "=" * 80)
-        print(f"📊 DAILY SUMMARY: {daily_log['date']}")
+        session_info = daily_log.get("session_info", {})
+        session_status = "🔄 CONTINUING SESSION" if session_info.get("is_continuing_session", False) else "🆕 NEW SESSION"
+        print(f"📊 DAILY SUMMARY: {daily_log['date']} ({session_status})")
+        if session_info.get("session_id"):
+            print(f"🆔 Session ID: {session_info['session_id']}")
         print("=" * 80)
 
         # Performance section
@@ -568,6 +680,10 @@ class ProfitLogger(LoggerMixin):
         """Save logs to file."""
         try:
             log_data = {
+                "session_id": self.session_id,
+                "session_start_time": self.session_start_time.isoformat(),
+                "session_start_equity": self.session_start_equity,
+                "is_continuing_session": self.is_continuing_session,
                 "trading_cycles": self.trading_cycles,
                 "daily_summaries": self.daily_summaries,
                 "performance_summary": {
@@ -607,42 +723,65 @@ class ProfitLogger(LoggerMixin):
             self.trading_cycles = log_data.get("trading_cycles", [])
             self.daily_summaries = log_data.get("daily_summaries", [])
 
-            # Restore performance summary
-            perf_summary = log_data.get("performance_summary", {})
-            self.current_equity = perf_summary.get(
-                "current_equity", self.current_equity
-            )
-            self.peak_equity = perf_summary.get("peak_equity", self.peak_equity)
-            self.total_trades = perf_summary.get("total_trades", 0)
-            self.winning_trades = perf_summary.get("winning_trades", 0)
-            self.losing_trades = perf_summary.get("losing_trades", 0)
-            self.total_pnl = perf_summary.get("total_pnl", 0.0)
-
-            # Restore daily rollover state
-            rollover_state = log_data.get("daily_rollover_state", {})
-            if rollover_state:
-                self.timezone = rollover_state.get("timezone", self.timezone)
-                self.daily_start_equity = rollover_state.get("daily_start_equity", self.current_equity)
-                self.previous_equity = rollover_state.get("previous_equity", self.current_equity)
-                self.daily_trades = rollover_state.get("daily_trades", 0)
-                self.daily_winning_trades = rollover_state.get("daily_winning_trades", 0)
-                self.daily_losing_trades = rollover_state.get("daily_losing_trades", 0)
-                self.daily_pnl = rollover_state.get("daily_pnl", 0.0)
-                
-                # Parse datetime fields
+            # Check if we're continuing a session (same day as last log entry)
+            last_session_id = log_data.get("session_id")
+            last_session_time = log_data.get("session_start_time")
+            last_session_start_equity = log_data.get("session_start_equity")
+            
+            # Check if capital has changed significantly (indicating a new session)
+            current_capital = self.config.get("initial_capital", 100000.0)
+            capital_changed = False
+            if last_session_start_equity and abs(last_session_start_equity - current_capital) > current_capital * 0.05:  # 5% threshold
+                capital_changed = True
+                self.logger.info(f"Capital changed significantly: {last_session_start_equity} -> {current_capital}, starting new session")
+            
+            if last_session_id and last_session_time and not capital_changed:
                 try:
-                    daily_start_time_str = rollover_state.get("daily_start_time")
-                    if daily_start_time_str:
-                        self.daily_start_time = datetime.fromisoformat(daily_start_time_str.replace('Z', '+00:00'))
+                    last_session_datetime = datetime.fromisoformat(last_session_time.replace('Z', '+00:00'))
+                    current_date = datetime.now(timezone.utc).date()
+                    last_session_date = last_session_datetime.date()
                     
-                    last_reset_str = rollover_state.get("last_daily_reset")
-                    if last_reset_str:
-                        self.last_daily_reset = datetime.fromisoformat(last_reset_str).date()
+                    # If same day and within reasonable time (e.g., within 24 hours), continue session
+                    if current_date == last_session_date:
+                        self.is_continuing_session = True
+                        self.session_id = last_session_id
+                        self.session_start_time = last_session_datetime
+                        self.logger.info(f"Continuing previous session: {self.session_id}")
+                    else:
+                        self.logger.info(f"Starting new session (date changed): {self.session_id}")
+                        
                 except Exception as e:
-                    self.logger.warning(f"Failed to parse datetime fields from rollover state: {e}")
-                    # Reset to current time
-                    self.daily_start_time = datetime.now(timezone.utc)
-                    self.last_daily_reset = datetime.now(timezone.utc).date()
+                    self.logger.warning(f"Could not parse session time: {e}, starting new session")
+            else:
+                self.logger.info(f"Starting new session (no previous session found or capital changed): {self.session_id}")
+
+            # Only restore performance data if continuing session
+            if self.is_continuing_session:
+                perf_summary = log_data.get("performance_summary", {})
+                self.current_equity = perf_summary.get("current_equity", self.current_equity)
+                self.peak_equity = perf_summary.get("peak_equity", self.peak_equity)
+                self.total_trades = perf_summary.get("total_trades", 0)
+                self.winning_trades = perf_summary.get("winning_trades", 0)
+                self.losing_trades = perf_summary.get("losing_trades", 0)
+                self.total_pnl = perf_summary.get("total_pnl", 0.0)
+                
+                # Restore daily rollover state
+                rollover_state = log_data.get("daily_rollover_state", {})
+                if rollover_state:
+                    self.timezone = rollover_state.get("timezone", self.timezone)
+                    self.daily_start_equity = rollover_state.get("daily_start_equity", self.current_equity)
+                    self.previous_equity = rollover_state.get("previous_equity", self.current_equity)
+                    self.daily_trades = rollover_state.get("daily_trades", 0)
+                    self.daily_winning_trades = rollover_state.get("daily_winning_trades", 0)
+                    self.daily_losing_trades = rollover_state.get("daily_losing_trades", 0)
+                    self.daily_pnl = rollover_state.get("daily_pnl", 0.0)
+                    
+                self.logger.info("Restored performance data from previous session")
+            else:
+                # Reset to current equity for new session
+                self.session_start_equity = self.current_equity
+                self.daily_start_equity = self.current_equity
+                self.logger.info("Starting fresh session - resetting performance counters")
 
             self.logger.info(
                 f"Loaded {len(self.trading_cycles)} trading cycles and {len(self.daily_summaries)} daily summaries"
@@ -746,3 +885,70 @@ class ProfitLogger(LoggerMixin):
         )
 
         self.logger.info("Configuration updated")
+
+    def get_enhanced_position_details(
+        self, 
+        positions: dict[str, dict[str, Any]], 
+        data_engine=None,
+        live_mode: bool = False
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Get enhanced position details with live mark prices.
+        
+        Args:
+            positions: Dictionary of position data
+            data_engine: Data engine for getting live prices
+            live_mode: Whether in live trading mode
+            
+        Returns:
+            Enhanced position details with live mark prices
+        """
+        enhanced_positions = {}
+        
+        for symbol, position in positions.items():
+            try:
+                # Start with existing position data
+                enhanced_pos = position.copy()
+                
+                # Try to get live mark price if data engine is available
+                if data_engine:
+                    mark_price = get_mark_price(
+                        symbol, 
+                        data_engine, 
+                        live_mode=live_mode
+                    )
+                    
+                    if mark_price and validate_mark_price(mark_price, symbol):
+                        enhanced_pos["current_price"] = mark_price
+                        enhanced_pos["market_value"] = position.get("quantity", 0) * mark_price
+                        enhanced_pos["unrealized_pnl"] = (mark_price - position.get("entry_price", 0)) * position.get("quantity", 0)
+                        enhanced_pos["price_source"] = "live_mark"
+                    else:
+                        # Use existing price if no live price available
+                        existing_price = position.get("current_price", position.get("price", 0))
+                        if existing_price and existing_price > 0:
+                            enhanced_pos["current_price"] = existing_price
+                            enhanced_pos["market_value"] = position.get("quantity", 0) * existing_price
+                            enhanced_pos["unrealized_pnl"] = (existing_price - position.get("entry_price", 0)) * position.get("quantity", 0)
+                            enhanced_pos["price_source"] = "cached"
+                        else:
+                            enhanced_pos["current_price"] = 0
+                            enhanced_pos["market_value"] = 0
+                            enhanced_pos["unrealized_pnl"] = 0
+                            enhanced_pos["price_source"] = "none"
+                else:
+                    # No data engine, use existing data
+                    existing_price = position.get("current_price", position.get("price", 0))
+                    enhanced_pos["current_price"] = existing_price
+                    enhanced_pos["market_value"] = position.get("quantity", 0) * existing_price if existing_price else 0
+                    enhanced_pos["unrealized_pnl"] = (existing_price - position.get("entry_price", 0)) * position.get("quantity", 0) if existing_price else 0
+                    enhanced_pos["price_source"] = "cached"
+                
+                enhanced_positions[symbol] = enhanced_pos
+                
+            except Exception as e:
+                self.logger.warning(f"Error enhancing position data for {symbol}: {e}")
+                # Fallback to original position data
+                enhanced_positions[symbol] = position
+        
+        return enhanced_positions

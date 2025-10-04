@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Any, Optional
 
 from ..core.logging_utils import LoggerMixin
+from ..core.utils import get_mark_price, validate_mark_price
 
 
 class OrderType(Enum):
@@ -115,6 +116,9 @@ class OrderManager(LoggerMixin):
         self.live_mode = self.config.get("live_mode", False)
         self.api_keys_validated = False
         self.slippage_bps = self.config.get("slippage_bps", 5)  # 0.05% slippage
+        
+        # Session management
+        self.current_session_id = None
 
         # Market simulation parameters
         self.volatility_factor = self.config.get(
@@ -123,6 +127,19 @@ class OrderManager(LoggerMixin):
         self.liquidity_factor = self.config.get(
             "liquidity_factor", 0.95
         )  # 95% fill probability
+
+        # Order tracking
+        self.orders: dict[str, Order] = {}
+        self.fills: list[Fill] = []
+        self.order_counter = 0
+
+        self.initialized = False
+        
+        # Data engine for getting mark prices (will be set by trading system)
+        self.data_engine = None
+        
+        # State store for session cash management (will be set by trading system)
+        self.state_store = None
 
     def validate_api_keys(self, config: dict[str, Any]) -> bool:
         """
@@ -219,12 +236,6 @@ class OrderManager(LoggerMixin):
         except RuntimeError:
             return False
 
-        # Order tracking
-        self.orders: dict[str, Order] = {}
-        self.fills: list[Fill] = []
-        self.order_counter = 0
-
-        self.initialized = False
 
     def initialize(self) -> None:
         """Initialize the order manager."""
@@ -240,6 +251,221 @@ class OrderManager(LoggerMixin):
 
         self.initialized = True
 
+    def set_data_engine(self, data_engine) -> None:
+        """Set the data engine for getting mark prices.
+        
+        Args:
+            data_engine: Data engine instance
+        """
+        self.data_engine = data_engine
+        self.logger.info("Data engine set for order manager")
+
+    def set_session_id(self, session_id: str) -> None:
+        """Set the current session ID for order operations.
+        
+        Args:
+            session_id: Session identifier
+        """
+        if not session_id:
+            raise ValueError("session_id cannot be empty")
+        self.current_session_id = session_id
+        self.logger.debug(f"OrderManager session ID set to: {session_id}")
+
+    def set_state_store(self, state_store) -> None:
+        """Set the state store for session cash management.
+        
+        Args:
+            state_store: State store instance
+        """
+        self.state_store = state_store
+        self.logger.info("State store set for order manager")
+
+    def get_order_price(self, symbol: str, order_type: OrderType, price: Optional[float] = None) -> Optional[float]:
+        """Get appropriate price for an order using mark prices.
+        
+        Args:
+            symbol: Trading symbol
+            order_type: Type of order
+            price: Explicit price if provided
+            
+        Returns:
+            Order price or None if no valid price available
+        """
+        # If explicit price provided, validate it
+        if price is not None:
+            if price > 0 and validate_mark_price(price, symbol):
+                return price
+            else:
+                self.logger.info(f"⏭️ SKIP {symbol} reason=price_out_of_range notional=$0.00 cash=$0.00")
+                return None
+        
+        # For market orders, we need current mark price
+        if order_type == OrderType.MARKET:
+            if not self.data_engine:
+                self.logger.info(f"⏭️ SKIP {symbol} reason=no_price notional=$0.00 cash=$0.00")
+                return None
+            
+            mark_price = get_mark_price(
+                symbol, 
+                self.data_engine, 
+                live_mode=self.live_mode
+            )
+            
+            if mark_price and validate_mark_price(mark_price, symbol):
+                return mark_price
+            else:
+                # Check if we have a data engine but no price (likely stale)
+                if self.data_engine:
+                    self.logger.info(f"⏭️ SKIP {symbol} reason=stale_price notional=$0.00 cash=$0.00")
+                else:
+                    self.logger.info(f"⏭️ SKIP {symbol} reason=no_price notional=$0.00 cash=$0.00")
+                return None
+        
+        # For limit orders without explicit price, use mark price as reference
+        elif order_type == OrderType.LIMIT and price is None:
+            if not self.data_engine:
+                self.logger.info(f"⏭️ SKIP {symbol} reason=no_price notional=$0.00 cash=$0.00")
+                return None
+            
+            mark_price = get_mark_price(
+                symbol, 
+                self.data_engine, 
+                live_mode=self.live_mode
+            )
+            
+            if mark_price and validate_mark_price(mark_price, symbol):
+                # Use mark price as default limit price
+                return mark_price
+            else:
+                # Check if we have a data engine but no price (likely stale)
+                if self.data_engine:
+                    self.logger.info(f"⏭️ SKIP {symbol} reason=stale_price notional=$0.00 cash=$0.00")
+                else:
+                    self.logger.info(f"⏭️ SKIP {symbol} reason=no_price notional=$0.00 cash=$0.00")
+                return None
+        
+        # For other order types, return the provided price or None
+        return price if price and price > 0 else None
+
+    def check_budget_constraints(
+        self, 
+        symbol: str, 
+        side: OrderSide, 
+        quantity: float, 
+        price: float
+    ) -> tuple[bool, float, str]:
+        """Check budget constraints and adjust quantity if necessary.
+        
+        Args:
+            symbol: Trading symbol
+            side: Order side (buy/sell)
+            quantity: Requested quantity
+            price: Order price
+            
+        Returns:
+            Tuple of (can_proceed, adjusted_quantity, skip_reason)
+            - can_proceed: True if order can proceed
+            - adjusted_quantity: Quantity after budget adjustment (0 if skipped)
+            - skip_reason: Reason for skipping if can_proceed is False
+        """
+        if not self.state_store:
+            self.logger.warning("No state store available for budget checking")
+            return True, quantity, ""
+        
+        # Get current session cash
+        session_cash = self.state_store.get_session_cash()
+        
+        # Calculate notional value
+        notional = quantity * price
+        
+        # Check minimum notional (typically $10-20 for most exchanges)
+        min_notional = 10.0  # Minimum notional value
+        if notional < min_notional:
+            self.logger.info(f"⏭️ SKIP {symbol} reason=min_notional notional=${notional:.2f} cash=${session_cash:.2f}")
+            return False, 0.0, "min_notional"
+        
+        # Check precision (ensure quantity is valid lot size)
+        # Simplified lot size check - assume 0.001 precision for most crypto pairs
+        min_lot_size = 0.001
+        if quantity < min_lot_size:
+            self.logger.info(f"⏭️ SKIP {symbol} reason=precision_fail notional=${notional:.2f} cash=${session_cash:.2f}")
+            return False, 0.0, "precision_fail"
+        
+        if side == OrderSide.BUY:
+            # For buy orders, check if we have enough cash
+            # Estimate fees (use taker fee as worst case)
+            estimated_fees = notional * (self.taker_fee_bps / 10000)
+            est_cost = notional + estimated_fees
+            
+            if est_cost > session_cash:
+                # Try to shrink notional to fit
+                max_affordable_notional = max(0, session_cash - estimated_fees)
+                
+                if max_affordable_notional <= 0:
+                    self.logger.info(f"⏭️ SKIP {symbol} reason=budget_exhausted notional=${notional:.2f} cash=${session_cash:.2f}")
+                    return False, 0.0, "budget_exhausted"
+                
+                # Check if adjusted notional meets minimum requirements
+                if max_affordable_notional < min_notional:
+                    self.logger.info(f"⏭️ SKIP {symbol} reason=min_notional notional=${max_affordable_notional:.2f} cash=${session_cash:.2f}")
+                    return False, 0.0, "min_notional"
+                
+                # Recalculate quantity based on affordable notional
+                adjusted_quantity = max_affordable_notional / price
+                
+                # Round down to lot size (simplified - assume 0.001 lot size)
+                adjusted_quantity = int(adjusted_quantity * 1000) / 1000
+                
+                if adjusted_quantity <= 0:
+                    self.logger.info(f"⏭️ SKIP {symbol} reason=budget_exhausted notional=${max_affordable_notional:.2f} cash=${session_cash:.2f}")
+                    return False, 0.0, "budget_exhausted"
+                
+                self.logger.info(f"Budget constraint: reduced {symbol} buy quantity from {quantity:.4f} to {adjusted_quantity:.4f}")
+                return True, adjusted_quantity, ""
+            else:
+                return True, quantity, ""
+        else:
+            # For sell orders, we're adding cash, so no constraint
+            return True, quantity, ""
+
+    def apply_fill_cash_impact(self, fill: Fill) -> bool:
+        """Apply cash impact of a fill to the session.
+        
+        Args:
+            fill: Fill information
+            
+        Returns:
+            True if successful, False if error
+        """
+        if not self.state_store:
+            self.logger.warning("No state store available for cash impact")
+            return False
+        
+        if fill.quantity <= 0:
+            # No fill, no cash impact
+            return True
+        
+        notional = fill.quantity * fill.price
+        
+        if not self.current_session_id:
+            raise RuntimeError("session_id not set - cannot process cash operations without valid session")
+
+        if fill.side == OrderSide.BUY:
+            # Debit cash for buy orders
+            success = self.state_store.debit_cash(self.current_session_id, notional, fill.fees)
+            if not success:
+                self.logger.error(f"Failed to debit cash for buy order: {fill.order_id}")
+                return False
+        else:
+            # Credit cash for sell orders
+            success = self.state_store.credit_cash(self.current_session_id, notional, fill.fees)
+            if not success:
+                self.logger.error(f"Failed to credit cash for sell order: {fill.order_id}")
+                return False
+        
+        self.logger.debug(f"Applied cash impact for {fill.side.value} order {fill.order_id}: ${notional:.2f}")
+        return True
+
     def create_order(
         self,
         symbol: str,
@@ -250,8 +476,8 @@ class OrderManager(LoggerMixin):
         stop_price: Optional[float] = None,
         strategy: str = "",
         metadata: Optional[dict[str, Any]] = None,
-    ) -> Order:
-        """Create a new order.
+    ) -> Optional[Order]:
+        """Create a new order with mark price validation and budget constraints.
 
         Args:
             symbol: Trading symbol
@@ -264,23 +490,42 @@ class OrderManager(LoggerMixin):
             metadata: Additional metadata
 
         Returns:
-            Created order
+            Created order or None if price validation fails or budget constraints prevent order
         """
         if not self.initialized:
             self.initialize()
+
+        # Get validated price for the order
+        validated_price = self.get_order_price(symbol, order_type, price)
+        
+        if validated_price is None:
+            # Price validation skip is already logged in get_order_price
+            return None
+
+        # Check budget constraints and adjust quantity if necessary
+        can_proceed, adjusted_quantity, skip_reason = self.check_budget_constraints(
+            symbol, side, quantity, validated_price
+        )
+        
+        if not can_proceed:
+            # Skip reason is already logged in check_budget_constraints with cash/notional info
+            return None
+        
+        # Use adjusted quantity
+        quantity = adjusted_quantity
 
         # Generate unique order ID
         self.order_counter += 1
         order_id = f"order_{self.order_counter}_{int(datetime.now().timestamp())}"
 
-        # Create order
+        # Create order with validated price and adjusted quantity
         order = Order(
             id=order_id,
             symbol=symbol,
             side=side,
             order_type=order_type,
             quantity=quantity,
-            price=price,
+            price=validated_price,
             stop_price=stop_price,
             strategy=strategy,
             metadata=metadata or {},
@@ -290,7 +535,7 @@ class OrderManager(LoggerMixin):
         self.orders[order_id] = order
 
         self.logger.debug(
-            f"Created order {order_id}: {side.value} {quantity} {symbol} @ {price}"
+            f"Created order {order_id}: {side.value} {quantity} {symbol} @ {validated_price}"
         )
 
         return order
@@ -541,6 +786,12 @@ class OrderManager(LoggerMixin):
                 metadata=order.metadata.copy(),
             )
 
+            # Apply cash impact to session
+            cash_success = self.apply_fill_cash_impact(fill)
+            if not cash_success:
+                self.logger.error(f"Failed to apply cash impact for order {order.id}")
+                # Continue anyway - the fill happened, just log the error
+
             # Update order status
             order.status = OrderStatus.FILLED
             order.filled_quantity = order.quantity
@@ -556,6 +807,13 @@ class OrderManager(LoggerMixin):
 
             return fill
         else:
+            # Order not filled - check if it's due to exchange rejection
+            # In live mode, this could be due to insufficient wallet balance
+            if self.live_mode:
+                notional = order.quantity * current_price
+                session_cash = self.state_store.get_session_cash() if self.state_store else 0
+                self.logger.info(f"⏭️ SKIP {order.symbol} reason=exchange_reject notional=${notional:.2f} cash=${session_cash:.2f}")
+            
             # Order not filled
             order.status = OrderStatus.PENDING
             self.logger.debug(

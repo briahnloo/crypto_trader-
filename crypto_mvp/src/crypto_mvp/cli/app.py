@@ -122,6 +122,34 @@ Examples:
         help="Interval between trading cycles in seconds (default: from config)",
     )
 
+    # Session management options
+    parser.add_argument(
+        "--session-id",
+        type=str,
+        help="Session identifier for state persistence (default: auto-generated timestamp-rand)",
+    )
+
+    parser.add_argument(
+        "--continue-session",
+        action="store_true",
+        default=False,
+        help="Continue an existing session instead of starting fresh (requires --session-id)",
+    )
+
+    parser.add_argument(
+        "--override-session-capital",
+        action="store_true",
+        default=False,
+        help="Override session capital with --capital value (default: False). When True, --capital overrides session state.",
+    )
+
+    parser.add_argument(
+        "--include-existing",
+        action="store_true",
+        default=False,
+        help="Include existing positions from exchange in live mode (default: False). Reduces session cash by market value of existing positions.",
+    )
+
     return parser
 
 
@@ -153,6 +181,11 @@ def validate_arguments(args: argparse.Namespace) -> None:
                     f"Error: Invalid symbol format '{symbol}'. Use format like 'BTC/USDT'"
                 )
                 sys.exit(1)
+
+    # Validate session arguments
+    if args.continue_session and not args.session_id:
+        print("Error: --continue-session requires --session-id to be specified")
+        sys.exit(1)
 
 
 def validate_live_mode_safety(args: argparse.Namespace) -> None:
@@ -287,6 +320,13 @@ def print_startup_info(args: argparse.Namespace) -> None:
     if args.cycle_interval:
         print(f"⏱️  Cycle Interval: {args.cycle_interval}s")
 
+    # Session information
+    if args.session_id:
+        print(f"🆔 Session ID: {args.session_id}")
+        print(f"🔄 Session Mode: {'Continue' if args.continue_session else 'New'}")
+    else:
+        print(f"🆔 Session ID: Auto-generated")
+
     print("=" * 60)
 
 
@@ -353,13 +393,36 @@ async def run_single_cycle(args: argparse.Namespace) -> None:
     print("🔄 Running single trading cycle...")
 
     try:
+        # Generate session_id if not provided
+        if not args.session_id:
+            from datetime import datetime
+            import random
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            random_suffix = f"{random.randint(1000, 9999)}"
+            args.session_id = f"{timestamp}-{random_suffix}"
+            print(f"🆕 Generated session ID: {args.session_id}")
+        
         # Initialize trading system
         trading_system = ProfitMaximizingTradingSystem(args.config)
-        trading_system.initialize()
-
-        # Override config with CLI arguments
+        
+        # Load config first
+        trading_system.config_manager = ConfigManager(args.config)
+        trading_system.config = trading_system.config_manager.to_dict()
+        
+        # Override config with CLI arguments BEFORE full initialization
         if args.capital:
             trading_system.config["trading"]["initial_capital"] = args.capital
+        
+        # Now initialize with the updated config and session parameters
+        trading_system.initialize(
+            session_id=args.session_id,
+            continue_session=args.continue_session,
+            respect_session_capital=not args.override_session_capital,
+            include_existing=args.include_existing
+        )
+
+        # Update in-memory portfolio after initialization
+        if args.capital:
             trading_system.portfolio["equity"] = args.capital
             trading_system.portfolio["cash_balance"] = args.capital
 
@@ -398,13 +461,36 @@ async def run_continuous(args: argparse.Namespace) -> None:
     print("🔄 Starting continuous trading...")
 
     try:
+        # Generate session_id if not provided
+        if not args.session_id:
+            from datetime import datetime
+            import random
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            random_suffix = f"{random.randint(1000, 9999)}"
+            args.session_id = f"{timestamp}-{random_suffix}"
+            print(f"🆕 Generated session ID: {args.session_id}")
+        
         # Initialize trading system
         trading_system = ProfitMaximizingTradingSystem(args.config)
-        trading_system.initialize()
-
-        # Override config with CLI arguments
+        
+        # Load config first
+        trading_system.config_manager = ConfigManager(args.config)
+        trading_system.config = trading_system.config_manager.to_dict()
+        
+        # Override config with CLI arguments BEFORE full initialization
         if args.capital:
             trading_system.config["trading"]["initial_capital"] = args.capital
+        
+        # Now initialize with the updated config and session parameters
+        trading_system.initialize(
+            session_id=args.session_id,
+            continue_session=args.continue_session,
+            respect_session_capital=not args.override_session_capital,
+            include_existing=args.include_existing
+        )
+
+        # Update in-memory portfolio after initialization
+        if args.capital:
             trading_system.portfolio["equity"] = args.capital
             trading_system.portfolio["cash_balance"] = args.capital
 

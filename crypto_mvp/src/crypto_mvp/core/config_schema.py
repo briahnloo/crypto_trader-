@@ -44,6 +44,7 @@ class PositionSizingMethod(str, Enum):
     FIXED_RISK = "fixed_risk"
     FIXED_SIZE = "fixed_size"
     KELLY_CRITERION = "kelly_criterion"
+    RISK_BASED = "risk_based"
 
 
 class ExchangeConfig(BaseModel):

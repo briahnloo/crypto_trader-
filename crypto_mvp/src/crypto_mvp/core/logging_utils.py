@@ -3,8 +3,11 @@ Logging utilities for the Crypto MVP application.
 """
 
 import logging
-import logging.handlers
 import sys
+try:
+    import logging.handlers
+except ImportError:
+    logging.handlers = None
 from pathlib import Path
 from typing import Any, Optional
 
@@ -81,7 +84,7 @@ def get_logger(name: str, config: dict[str, Any]) -> logging.Logger:
 
 def _create_rotating_file_handler(
     log_path: Path, rotation: str, retention: str, formatter: logging.Formatter
-) -> logging.handlers.TimedRotatingFileHandler:
+) -> logging.Handler:
     """Create a rotating file handler based on configuration.
 
     Args:
@@ -141,12 +144,16 @@ def _create_rotating_file_handler(
         backup_count = 30  # Default to 30 days
 
     # Create handler
-    handler = logging.handlers.TimedRotatingFileHandler(
-        filename=str(log_path),
-        when=when,
-        interval=interval,
-        backupCount=backup_count,
-        encoding="utf-8",
+    if logging.handlers is None:
+        # Fallback to basic FileHandler if handlers module is not available
+        handler = logging.FileHandler(log_path)
+    else:
+        handler = logging.handlers.TimedRotatingFileHandler(
+            filename=str(log_path),
+            when=when,
+            interval=interval,
+            backupCount=backup_count,
+            encoding="utf-8",
     )
 
     handler.setFormatter(formatter)

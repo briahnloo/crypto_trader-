@@ -59,6 +59,14 @@ class ProfitOptimizedRiskManager(LoggerMixin):
         self.max_position_size = self.config.get(
             "max_position_size", 0.20
         )  # 20% max position size
+        
+        # New risk-based sizing parameters
+        self.risk_per_trade_pct = self.config.get(
+            "risk_per_trade_pct", 0.25
+        )  # 0.25% of equity per trade
+        self.max_notional_pct = self.config.get(
+            "max_notional_pct", 1.0
+        )  # 1.0% max notional of equity
         self.kelly_fraction_limit = self.config.get(
             "kelly_fraction_limit", 0.25
         )  # 25% max Kelly fraction
@@ -106,6 +114,124 @@ class ProfitOptimizedRiskManager(LoggerMixin):
 
         self.initialized = True
 
+    def calculate_risk_based_position_size(
+        self,
+        symbol: str,
+        signal_data: dict[str, Any],
+        current_price: float,
+        portfolio_value: Optional[float] = None,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """Calculate position size based on risk amount and stop loss.
+        
+        Args:
+            symbol: Trading symbol
+            signal_data: Signal data containing side and other info
+            current_price: Current market price
+            portfolio_value: Total portfolio value
+            stop_loss: Stop loss price
+            take_profit: Take profit price
+            
+        Returns:
+            Dictionary with position size and risk metrics
+        """
+        if not portfolio_value:
+            portfolio_value = self.portfolio_value
+            
+        if portfolio_value <= 0:
+            self.logger.warning(f"Invalid portfolio value: {portfolio_value}")
+            return {
+                "position_size": 0.0,
+                "risk_amount": 0.0,
+                "notional_value": 0.0,
+                "max_risk_respected": False,
+                "max_notional_respected": False,
+                "metadata": {"error": "invalid_portfolio_value"}
+            }
+        
+        # Calculate risk amount as percentage of equity
+        risk_amount = portfolio_value * (self.risk_per_trade_pct / 100)
+        
+        # Determine position side
+        side = signal_data.get("side", "buy")
+        if "score" in signal_data:
+            side = "buy" if signal_data["score"] > 0 else "sell"
+        
+        # Calculate position size based on stop loss
+        if stop_loss and stop_loss > 0:
+            if side == "buy":
+                # Long position: risk = (entry_price - stop_loss) * quantity
+                price_diff = current_price - stop_loss
+                if price_diff > 0:
+                    position_size = risk_amount / price_diff
+                else:
+                    self.logger.warning(f"Invalid stop loss for long position: {stop_loss} >= {current_price}")
+                    return self._empty_position_result()
+            else:
+                # Short position: risk = (stop_loss - entry_price) * quantity
+                price_diff = stop_loss - current_price
+                if price_diff > 0:
+                    position_size = risk_amount / price_diff
+                else:
+                    self.logger.warning(f"Invalid stop loss for short position: {stop_loss} <= {current_price}")
+                    return self._empty_position_result()
+        else:
+            # Fallback: use 0.25% of equity as position value
+            position_value = portfolio_value * (self.risk_per_trade_pct / 100)
+            position_size = position_value / current_price
+            
+        # Calculate notional value
+        notional_value = abs(position_size) * current_price
+        
+        # Apply notional cap
+        max_notional = portfolio_value * (self.max_notional_pct / 100)
+        if notional_value > max_notional:
+            position_size = (max_notional / current_price) * (1 if position_size > 0 else -1)
+            notional_value = max_notional
+            
+        # Check if risk limits are respected
+        actual_risk = risk_amount if stop_loss else notional_value * (self.risk_per_trade_pct / 100)
+        max_risk_respected = actual_risk <= portfolio_value * (self.max_risk_per_trade)
+        max_notional_respected = notional_value <= max_notional
+        
+        # Log the sizing calculation
+        self.logger.info(
+            f"sizing=risk_based risk_pct={self.risk_per_trade_pct}% qty={position_size:.4f} "
+            f"notional=${notional_value:.2f} risk=${actual_risk:.2f} side={side}"
+        )
+        
+        return {
+            "position_size": position_size,
+            "risk_amount": actual_risk,
+            "notional_value": notional_value,
+            "max_risk_respected": max_risk_respected,
+            "max_notional_respected": max_notional_respected,
+            "metadata": {
+                "sizing_method": "risk_based",
+                "risk_per_trade_pct": self.risk_per_trade_pct,
+                "max_notional_pct": self.max_notional_pct,
+                "side": side,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit
+            }
+        }
+    
+    def _empty_position_result(self) -> dict[str, Any]:
+        """Return empty position result for invalid cases.
+        
+        Returns:
+            Empty position result dictionary
+        """
+        return {
+            "position_size": 0.0,
+            "risk_amount": 0.0,
+            "notional_value": 0.0,
+            "max_risk_respected": False,
+            "max_notional_respected": False,
+            "metadata": {"error": "invalid_parameters"}
+        }
+
     def calculate_optimal_position_size(
         self,
         symbol: str,
@@ -141,7 +267,40 @@ class ProfitOptimizedRiskManager(LoggerMixin):
         # Use provided portfolio value or default
         portfolio_value = portfolio_value or self.portfolio_value
 
-        # Extract signal information
+        # Check if we should use risk-based sizing
+        sizing_method = self.config.get("position_sizing", {}).get("method", "kelly_criterion")
+        if sizing_method == "risk_based":
+            # Extract stop loss and take profit from signal data
+            stop_loss = signal_data.get("stop_loss")
+            take_profit = signal_data.get("take_profit")
+            
+            # If not provided, try to calculate defaults
+            if not stop_loss or not take_profit:
+                try:
+                    side = "buy" if signal_data.get("score", 0) > 0 else "sell"
+                    sl_tp_result = self.calculate_sl_tp_defaults(
+                        symbol=symbol,
+                        entry_price=current_price,
+                        side=side,
+                        stop_loss=stop_loss,
+                        take_profit=take_profit
+                    )
+                    stop_loss = sl_tp_result.get("stop_loss", stop_loss)
+                    take_profit = sl_tp_result.get("take_profit", take_profit)
+                except Exception as e:
+                    self.logger.warning(f"Failed to calculate default SL/TP for {symbol}: {e}")
+            
+            # Use risk-based sizing
+            return self.calculate_risk_based_position_size(
+                symbol=symbol,
+                signal_data=signal_data,
+                current_price=current_price,
+                portfolio_value=portfolio_value,
+                stop_loss=stop_loss,
+                take_profit=take_profit
+            )
+
+        # Extract signal information for legacy methods
         signal_score = signal_data.get("score", 0.0)
         signal_confidence = signal_data.get("confidence", 0.0)
         signal_strength = signal_data.get("signal_strength", 0.0)
@@ -465,6 +624,539 @@ class ProfitOptimizedRiskManager(LoggerMixin):
             if self.portfolio_value > 0
             else 0,
         }
+
+    def calculate_sl_tp_defaults(
+        self, 
+        symbol: str, 
+        entry_price: float, 
+        side: str, 
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+        data_engine=None
+    ) -> dict[str, float]:
+        """Calculate default SL/TP using ATR if not provided or too close to entry.
+        
+        Args:
+            symbol: Trading symbol
+            entry_price: Entry price for the position
+            side: 'buy' or 'sell'
+            stop_loss: Existing stop loss (optional)
+            take_profit: Existing take profit (optional)
+            data_engine: Data engine for getting OHLCV data
+            
+        Returns:
+            Dictionary with 'stop_loss' and 'take_profit' values
+        """
+        try:
+            # Validate entry price first
+            if entry_price is None or entry_price <= 0:
+                self.logger.error(f"Invalid entry_price: {entry_price} for {symbol}. Cannot calculate SL/TP.")
+                raise ValueError(f"Invalid entry_price: {entry_price}")
+            
+            # Calculate ATR if data engine is available
+            atr = None
+            if data_engine:
+                try:
+                    ohlcv_data = data_engine.get_clean_ohlcv(symbol, "1h", 20)
+                    if ohlcv_data:
+                        high = [candle['high'] for candle in ohlcv_data]
+                        low = [candle['low'] for candle in ohlcv_data]
+                        close = [candle['close'] for candle in ohlcv_data]
+                        
+                        from ..indicators import safe_atr
+                        atr = safe_atr(high, low, close, period=14, symbol=symbol, logger=self.logger)
+                except Exception as e:
+                    self.logger.debug(f"ATR calculation failed for {symbol}: {e}")
+                    atr = None
+            
+            # Use the new derive_sl_tp method
+            result = self.derive_sl_tp(
+                entry_price=entry_price,
+                side=side,
+                atr=atr,
+                strategy_sl=stop_loss,
+                strategy_tp=take_profit,
+                symbol=symbol
+            )
+            
+            # Log the result with source information
+            source = result.get('source', 'unknown')
+            sl = result['stop_loss']
+            tp = result['take_profit']
+            atr_val = result.get('atr')
+            
+            # Safe formatting with None checks
+            sl_str = f"{sl:.6f}" if sl is not None else "None"
+            tp_str = f"{tp:.6f}" if tp is not None else "None"
+            atr_str = f"{atr_val:.6f}" if atr_val is not None else "NA"
+            
+            self.logger.info(f"sl_tp_src={source} sl={sl_str} tp={tp_str} atr={atr_str} for {symbol}")
+            
+            return {
+                'stop_loss': sl,
+                'take_profit': tp
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error in calculate_sl_tp_defaults for {symbol}: {e}")
+            
+            # Check if entry_price is valid for emergency fallback
+            if entry_price is None or entry_price <= 0:
+                self.logger.error(f"Cannot use emergency fallback with invalid entry_price: {entry_price}")
+                raise ValueError(f"Invalid entry_price for emergency fallback: {entry_price}")
+            
+            # Emergency fallback
+            if side.lower() == 'buy':
+                emergency_sl = entry_price * 0.98  # 2% below entry
+                emergency_tp = entry_price * 1.04  # 4% above entry
+            else:
+                emergency_sl = entry_price * 1.02  # 2% above entry
+                emergency_tp = entry_price * 0.96  # 4% below entry
+            
+            self.logger.info(f"sl_tp_src=emergency sl={emergency_sl:.6f} tp={emergency_tp:.6f} atr=NA for {symbol}")
+            return {
+                'stop_loss': emergency_sl,
+                'take_profit': emergency_tp
+            }
+
+    def derive_sl_tp(
+        self,
+        entry_price: float,
+        side: str,
+        atr: Optional[float] = None,
+        strategy_sl: Optional[float] = None,
+        strategy_tp: Optional[float] = None,
+        symbol: str = "unknown"
+    ) -> dict[str, Any]:
+        """Derive SL/TP with guaranteed fallback in order of preference: Strategy → ATR-based → Percent fallback.
+        
+        Args:
+            entry_price: Entry price for the position
+            side: 'buy' or 'sell'
+            atr: ATR value (optional)
+            strategy_sl: Strategy-provided stop loss (optional)
+            strategy_tp: Strategy-provided take profit (optional)
+            symbol: Trading symbol for logging (optional)
+            
+        Returns:
+            Dictionary with 'stop_loss', 'take_profit', and 'source' information
+        """
+        try:
+            # Validate entry price first
+            if entry_price is None or entry_price <= 0:
+                self.logger.error(f"Invalid entry_price: {entry_price} for {symbol}. Cannot derive SL/TP.")
+                raise ValueError(f"Invalid entry_price: {entry_price}")
+            
+            # Get SL/TP configuration with defaults
+            sl_tp_config = self.config.get("risk", {}).get("sl_tp", {})
+            atr_mult_sl = sl_tp_config.get("atr_mult_sl", 1.2)
+            atr_mult_tp = sl_tp_config.get("atr_mult_tp", 2.0)
+            fallback_pct_sl = sl_tp_config.get("fallback_pct_sl", 0.02)
+            fallback_pct_tp = sl_tp_config.get("fallback_pct_tp", 0.04)
+            min_sl_abs = sl_tp_config.get("min_sl_abs", 0.001)
+            min_tp_abs = sl_tp_config.get("min_tp_abs", 0.002)
+            
+            # Get fallback configuration
+            enable_percent_fallback = self.config.get("risk", {}).get("enable_percent_fallback", True)
+            
+            # Priority 1: Strategy-provided SL/TP (if valid)
+            if (strategy_sl is not None and strategy_sl > 0 and 
+                strategy_tp is not None and strategy_tp > 0):
+                
+                # Validate strategy SL/TP distances
+                sl_distance = abs(entry_price - strategy_sl) / entry_price
+                tp_distance = abs(entry_price - strategy_tp) / entry_price
+                min_distance = 0.001  # 0.1% minimum distance
+                
+                if sl_distance >= min_distance and tp_distance >= min_distance:
+                    # Validate logical consistency
+                    if self._validate_sl_tp_logic(entry_price, strategy_sl, strategy_tp, side):
+                        self.logger.debug(f"Using strategy SL/TP for {symbol}: SL={strategy_sl:.6f}, TP={strategy_tp:.6f}")
+                        return {
+                            'stop_loss': strategy_sl,
+                            'take_profit': strategy_tp,
+                            'source': 'strategy',
+                            'atr': atr
+                        }
+            
+            # Priority 2: ATR-based SL/TP (if ATR is valid)
+            if atr is not None and atr > 0:
+                if side.lower() == 'buy':
+                    # Long position: SL below entry, TP above entry
+                    atr_sl = entry_price - (atr_mult_sl * atr)
+                    atr_tp = entry_price + (atr_mult_tp * atr)
+                else:
+                    # Short position: SL above entry, TP below entry  
+                    atr_sl = entry_price + (atr_mult_sl * atr)
+                    atr_tp = entry_price - (atr_mult_tp * atr)
+                
+                # Enforce minimum absolute distances
+                atr_sl = self._enforce_min_distance(entry_price, atr_sl, min_sl_abs, side, 'sl')
+                atr_tp = self._enforce_min_distance(entry_price, atr_tp, min_tp_abs, side, 'tp')
+                
+                # Validate logical consistency
+                if self._validate_sl_tp_logic(entry_price, atr_sl, atr_tp, side):
+                    self.logger.debug(f"Using ATR-based SL/TP for {symbol}: ATR={atr:.6f}, SL={atr_sl:.6f}, TP={atr_tp:.6f}")
+                    return {
+                        'stop_loss': atr_sl,
+                        'take_profit': atr_tp,
+                        'source': 'atr',
+                        'atr': atr
+                    }
+            
+            # Priority 3: Percent fallback (if enabled)
+            if enable_percent_fallback:
+                if side.lower() == 'buy':
+                    # Long position: SL below entry, TP above entry
+                    pct_sl = entry_price * (1 - fallback_pct_sl)
+                    pct_tp = entry_price * (1 + fallback_pct_tp)
+                else:
+                    # Short position: SL above entry, TP below entry
+                    pct_sl = entry_price * (1 + fallback_pct_sl)
+                    pct_tp = entry_price * (1 - fallback_pct_tp)
+                
+                # Enforce minimum absolute distances
+                pct_sl = self._enforce_min_distance(entry_price, pct_sl, min_sl_abs, side, 'sl')
+                pct_tp = self._enforce_min_distance(entry_price, pct_tp, min_tp_abs, side, 'tp')
+                
+                # Final validation and adjustment if needed
+                final_sl, final_tp = self._ensure_logical_consistency(entry_price, pct_sl, pct_tp, side, min_sl_abs, min_tp_abs)
+                
+                self.logger.debug(f"Using percent fallback SL/TP for {symbol}: SL={final_sl:.6f}, TP={final_tp:.6f}")
+                return {
+                    'stop_loss': final_sl,
+                    'take_profit': final_tp,
+                    'source': 'pct',
+                    'atr': atr
+                }
+            else:
+                # Percent fallback disabled and ATR failed - skip trade
+                self.logger.warning(f"No valid SL/TP derivation for {symbol}: ATR={atr}, fallback disabled")
+                raise ValueError("no_atr_no_fallback")
+            
+        except Exception as e:
+            self.logger.error(f"Error in derive_sl_tp for {symbol}: {e}")
+            
+            # Check if entry_price is valid for emergency fallback
+            if entry_price is None or entry_price <= 0:
+                self.logger.error(f"Cannot use emergency fallback with invalid entry_price: {entry_price}")
+                raise ValueError(f"Invalid entry_price for emergency fallback: {entry_price}")
+            
+            # Emergency fallback - use simple percentage defaults
+            if side.lower() == 'buy':
+                emergency_sl = entry_price * 0.98  # 2% below entry
+                emergency_tp = entry_price * 1.04  # 4% above entry
+            else:
+                emergency_sl = entry_price * 1.02  # 2% above entry
+                emergency_tp = entry_price * 0.96  # 4% below entry
+            
+            return {
+                'stop_loss': emergency_sl,
+                'take_profit': emergency_tp,
+                'source': 'emergency',
+                'atr': atr
+            }
+
+    def _validate_sl_tp_logic(self, entry_price: float, sl: float, tp: float, side: str) -> bool:
+        """Validate that SL/TP logic is correct for the given side.
+        
+        Args:
+            entry_price: Entry price
+            sl: Stop loss price
+            tp: Take profit price
+            side: 'buy' or 'sell'
+            
+        Returns:
+            True if logical consistency is maintained
+        """
+        if side.lower() == 'buy':
+            # Long: SL should be below entry, TP above entry
+            return sl < entry_price < tp
+        else:
+            # Short: TP should be below entry, SL above entry
+            return tp < entry_price < sl
+
+    def _enforce_min_distance(self, entry_price: float, price: float, min_abs: float, side: str, sl_or_tp: str) -> float:
+        """Enforce minimum absolute distance from entry price.
+        
+        Args:
+            entry_price: Entry price
+            price: Current SL or TP price
+            min_abs: Minimum absolute distance
+            side: 'buy' or 'sell'
+            sl_or_tp: 'sl' or 'tp'
+            
+        Returns:
+            Adjusted price with minimum distance enforced
+        """
+        current_distance = abs(entry_price - price)
+        if current_distance < min_abs:
+            if side.lower() == 'buy':
+                if sl_or_tp == 'sl':
+                    # SL should be below entry
+                    return entry_price - min_abs
+                else:
+                    # TP should be above entry
+                    return entry_price + min_abs
+            else:
+                if sl_or_tp == 'sl':
+                    # SL should be above entry
+                    return entry_price + min_abs
+                else:
+                    # TP should be below entry
+                    return entry_price - min_abs
+        return price
+
+    def _ensure_logical_consistency(self, entry_price: float, sl: float, tp: float, side: str, min_sl_abs: float, min_tp_abs: float) -> tuple[float, float]:
+        """Ensure final SL/TP values maintain logical consistency.
+        
+        Args:
+            entry_price: Entry price
+            sl: Stop loss price
+            tp: Take profit price
+            side: 'buy' or 'sell'
+            min_sl_abs: Minimum absolute distance for SL
+            min_tp_abs: Minimum absolute distance for TP
+            
+        Returns:
+            Tuple of (adjusted_sl, adjusted_tp)
+        """
+        if side.lower() == 'buy':
+            # Long: SL < entry < TP
+            if sl >= entry_price:
+                sl = entry_price - min_sl_abs
+            if tp <= entry_price:
+                tp = entry_price + min_tp_abs
+        else:
+            # Short: TP < entry < SL
+            if tp >= entry_price:
+                tp = entry_price - min_tp_abs
+            if sl <= entry_price:
+                sl = entry_price + min_sl_abs
+        
+        return sl, tp
+
+    def compute_rr(
+        self,
+        entry: float,
+        sl: float,
+        tp: float,
+        side: str,
+        fee_bps: float = 10.0,
+        slip_bps: float = 5.0
+    ) -> float:
+        """Compute robust risk-reward ratio accounting for fees/slippage and validating distances.
+        
+        Args:
+            entry: Entry price
+            sl: Stop loss price
+            tp: Take profit price
+            side: 'buy' or 'sell'
+            fee_bps: Fee in basis points (default 10 bps = 0.1%)
+            slip_bps: Slippage in basis points (default 5 bps = 0.05%)
+            
+        Returns:
+            Risk-reward ratio (reward/risk) as float
+            
+        Raises:
+            ValueError: If any input is invalid (None, negative, etc.)
+        """
+        # Convert to floats and validate inputs
+        try:
+            entry_float = float(entry)
+            sl_float = float(sl)
+            tp_float = float(tp)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"Invalid price inputs: entry={entry}, sl={sl}, tp={tp}") from e
+        
+        # Validate prices are positive
+        if entry_float <= 0 or sl_float <= 0 or tp_float <= 0:
+            raise ValueError(f"Prices must be positive: entry={entry_float}, sl={sl_float}, tp={tp_float}")
+        
+        # Get minimum SL absolute distance from config
+        sl_tp_config = self.config.get("risk", {}).get("sl_tp", {})
+        min_sl_abs = sl_tp_config.get("min_sl_abs", 0.001)
+        
+        # Calculate effective prices with slippage and fees
+        if side.lower() == 'buy':
+            # Long position: entry with slippage (buy higher), TP with fees (sell lower), SL unchanged
+            entry_eff = entry_float * (1 + slip_bps / 1e4)
+            tp_eff = tp_float * (1 - fee_bps / 1e4)
+            sl_eff = sl_float
+        else:
+            # Short position: entry with slippage (sell lower), TP with fees (buy higher), SL unchanged
+            entry_eff = entry_float * (1 - slip_bps / 1e4)
+            tp_eff = tp_float * (1 + fee_bps / 1e4)
+            sl_eff = sl_float
+        
+        # Calculate reward and risk
+        reward = abs(tp_eff - entry_eff)
+        risk = abs(entry_eff - sl_eff)
+        
+        # Guard against tiny risk values
+        if risk < 1e-9:
+            risk = min_sl_abs
+        
+        # Ensure minimum risk distance
+        if risk < min_sl_abs:
+            risk = min_sl_abs
+        
+        # Calculate RR ratio
+        rr_ratio = reward / risk if risk > 0 else 0.0
+        
+        # Return max(RR, 0.0) to ensure non-negative
+        return max(rr_ratio, 0.0)
+
+    def calculate_risk_reward_ratio(
+        self, 
+        entry_price: float, 
+        stop_loss: float, 
+        take_profit: float, 
+        side: str,
+        estimated_fees: Optional[float] = None,
+        estimated_slippage: Optional[float] = None
+    ) -> float:
+        """Calculate risk-reward ratio using the new compute_rr method with fallback.
+        
+        Args:
+            entry_price: Entry price
+            stop_loss: Stop loss price
+            take_profit: Take profit price
+            side: 'buy' or 'sell'
+            estimated_fees: Estimated trading fees (optional, ignored - using bps)
+            estimated_slippage: Estimated slippage (optional, ignored - using bps)
+            
+        Returns:
+            Risk-reward ratio (reward/risk) including costs
+        """
+        try:
+            # Use the new compute_rr method with default fee/slippage in basis points
+            return self.compute_rr(entry_price, stop_loss, take_profit, side)
+            
+        except ValueError as e:
+            self.logger.warning(f"RR calculation failed with ValueError: {e}")
+            return 0.0
+        except Exception as e:
+            self.logger.error(f"Unexpected error in RR calculation: {e}")
+            return 0.0
+
+    def validate_trade_parameters(
+        self,
+        symbol: str,
+        entry_price: float,
+        stop_loss: float,
+        take_profit: float,
+        side: str,
+        composite_score: float,
+        regime: Optional[str] = None,
+        effective_threshold: Optional[float] = None,
+        liquidity_ok: Optional[bool] = None
+    ) -> dict[str, Any]:
+        """Validate trade parameters and determine if trade should be executed.
+        
+        Args:
+            symbol: Trading symbol
+            entry_price: Entry price
+            stop_loss: Stop loss price
+            take_profit: Take profit price
+            side: 'buy' or 'sell'
+            composite_score: Composite signal score
+            regime: Market regime ('trending', 'ranging', etc.)
+            effective_threshold: Dynamic effective threshold (optional)
+            liquidity_ok: Whether liquidity is sufficient (optional)
+            
+        Returns:
+            Dictionary with validation results including skip_reason if applicable
+        """
+        try:
+            # Calculate risk-reward ratio with robust error handling
+            rr_ratio = 0.0
+            rr_calculation_error = None
+            
+            try:
+                # Try the new robust RR calculation
+                rr_ratio = self.compute_rr(entry_price, stop_loss, take_profit, side)
+            except ValueError as e:
+                # RR calculation failed due to invalid inputs
+                rr_calculation_error = str(e)
+                self.logger.warning(f"RR calculation failed for {symbol}: {e}")
+                
+                # Fallback: use percent-based SL/TP then recompute RR
+                try:
+                    fallback_result = self.derive_sl_tp(
+                        entry_price=entry_price,
+                        side=side,
+                        atr=None,  # Force percent fallback
+                        strategy_sl=None,
+                        strategy_tp=None,
+                        symbol=symbol
+                    )
+                    
+                    fallback_sl = fallback_result['stop_loss']
+                    fallback_tp = fallback_result['take_profit']
+                    
+                    # Recompute RR with fallback SL/TP
+                    rr_ratio = self.compute_rr(entry_price, fallback_sl, fallback_tp, side)
+                    self.logger.info(f"Used fallback SL/TP for RR calculation: SL={fallback_sl:.6f}, TP={fallback_tp:.6f}, RR={rr_ratio:.2f}")
+                    
+                except Exception as fallback_error:
+                    self.logger.error(f"Fallback RR calculation also failed for {symbol}: {fallback_error}")
+                    rr_ratio = 0.0
+            
+            # Check RR threshold first - if RR < 1.30, skip regardless of score
+            if rr_ratio < 1.30:
+                skip_reason = f'rr_too_low ratio={rr_ratio:.2f}'
+                if rr_calculation_error:
+                    skip_reason = f'rr_error {rr_calculation_error}'
+                
+                return {
+                    'valid': False,
+                    'skip_reason': skip_reason,
+                    'details': f"Risk-reward ratio {rr_ratio:.2f} below minimum 1.30" + (f" (error: {rr_calculation_error})" if rr_calculation_error else ""),
+                    'risk_reward_ratio': rr_ratio
+                }
+            
+            # Determine score floor based on RR and liquidity
+            if effective_threshold is None:
+                effective_threshold = 0.65  # Default threshold
+            
+            # Dynamic score floor logic
+            if rr_ratio >= 1.60 and (liquidity_ok is None or liquidity_ok):
+                # Strong RR and good liquidity - allow lower score floor
+                score_floor = max(effective_threshold - 0.05, 0.55)
+                floor_reason = "strong_rr_liquidity"
+            else:
+                # Use effective threshold as score floor
+                score_floor = effective_threshold
+                floor_reason = "standard_threshold"
+            
+            # Check composite score against dynamic floor
+            if composite_score < score_floor:
+                return {
+                    'valid': False,
+                    'skip_reason': f'low_score score_floor={score_floor:.3f} score={composite_score:.3f} rr={rr_ratio:.2f}',
+                    'details': f"Composite score {composite_score:.3f} below floor {score_floor:.3f} (RR={rr_ratio:.2f})",
+                    'risk_reward_ratio': rr_ratio,
+                    'score_floor': score_floor,
+                    'floor_reason': floor_reason
+                }
+            
+            # All validations passed
+            return {
+                'valid': True,
+                'risk_reward_ratio': rr_ratio,
+                'score_floor': score_floor,
+                'floor_reason': floor_reason,
+                'details': f"Trade validated: score={composite_score:.3f}≥{score_floor:.3f}, RR={rr_ratio:.2f}"
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error validating trade parameters for {symbol}: {e}")
+            return {
+                'valid': False,
+                'skip_reason': 'validation_error',
+                'details': f"Validation error: {e}"
+            }
 
 
 # Legacy RiskManager class for backward compatibility
