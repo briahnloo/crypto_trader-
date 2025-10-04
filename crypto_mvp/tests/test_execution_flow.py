@@ -30,7 +30,13 @@ class TestExecutionFlow:
         
         # Mock mark price callback
         self.mock_mark_price = Mock(return_value=50000.0)
-        self.execution_engine = ExecutionEngine(self.mock_mark_price)
+        self.mock_ticker_data = Mock(return_value={
+            "bid": 49995.0,
+            "ask": 50005.0,
+            "last": 50000.0,
+            "volume": 1000.0
+        })
+        self.execution_engine = ExecutionEngine(self.mock_mark_price, self.mock_ticker_data, {})
         
         # Mock pricing functions at the execution engine level
         self.patcher_get_executable_price = patch('execution.engine.get_executable_price')

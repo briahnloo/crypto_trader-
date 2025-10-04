@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 import logging
 
-from portfolio.ledger import Ledger, Fill
+from portfolio.ledger import Ledger, Fill, Position
 from portfolio.snapshot import PortfolioSnapshot
 
 logger = logging.getLogger(__name__)
@@ -122,14 +122,18 @@ def format_valuation_block(snapshot: PortfolioSnapshot) -> str:
 def format_daily_summary(
     ledger: Ledger,
     session_metrics: Dict[str, Any],
+    snapshot: Optional[PortfolioSnapshot] = None,
+    start_equity: Optional[float] = None,
     tz: str = "UTC"
 ) -> str:
     """
-    Format daily summary with consistent trade count from ledger.
+    Format enhanced daily summary with realized/unrealized P&L separation.
     
     Args:
         ledger: Trading ledger
         session_metrics: Session metrics dictionary
+        snapshot: Current portfolio snapshot (for unrealized P&L)
+        start_equity: Starting equity for daily P&L calculation
         tz: Timezone string
         
     Returns:
@@ -151,11 +155,48 @@ def format_daily_summary(
     total_notional = sum(fill.notional for fill in ledger.fills)
     total_volume = sum(abs(fill.qty) for fill in ledger.fills)
     
-    return (
-        f"Daily Summary: {total_trades} total trades, "
-        f"volume={total_volume:.2f}, fees=${total_fees:.2f}, "
+    # Calculate realized P&L from closed positions (using VWAP of fills)
+    realized_pnl = calculate_realized_pnl(ledger)
+    
+    # Calculate unrealized P&L from open positions (using mid prices)
+    unrealized_pnl = 0.0
+    if snapshot:
+        unrealized_pnl = snapshot.unrealized_pnl
+    
+    # Calculate daily P&L as equity difference
+    daily_pnl = 0.0
+    if start_equity is not None and snapshot:
+        daily_pnl = snapshot.equity - start_equity
+    
+    # Calculate performance metrics for closed trades only
+    profit_factor = "n/a"
+    sharpe_ratio = "n/a"
+    if realized_pnl != 0:  # Only calculate if we have closed trades
+        profit_factor, sharpe_ratio = calculate_performance_metrics(ledger, realized_pnl)
+    
+    # Build summary string
+    summary_parts = [
+        f"Daily Summary: {total_trades} total trades",
+        f"volume={total_volume:.2f}",
+        f"fees=${total_fees:.2f}",
         f"notional=${total_notional:,.2f}"
-    )
+    ]
+    
+    # Add P&L information
+    if abs(realized_pnl) > 1e-6:  # Use small epsilon for float comparison
+        summary_parts.append(f"realized_pnl=${realized_pnl:.2f}")
+    if abs(unrealized_pnl) > 1e-6:  # Use small epsilon for float comparison
+        summary_parts.append(f"unrealized_pnl=${unrealized_pnl:.2f}")
+    
+    if daily_pnl != 0:
+        summary_parts.append(f"daily_pnl=${daily_pnl:.2f}")
+    
+    # Add performance metrics
+    if profit_factor != "n/a":
+        summary_parts.append(f"profit_factor={profit_factor}")
+        summary_parts.append(f"sharpe={sharpe_ratio}")
+    
+    return ", ".join(summary_parts)
 
 
 def format_position_breakdown(snapshot: PortfolioSnapshot) -> str:
@@ -244,7 +285,8 @@ def log_cycle_summary(
     snapshot: PortfolioSnapshot,
     committed_fills: List[Fill],
     ledger: Ledger,
-    session_metrics: Dict[str, Any]
+    session_metrics: Dict[str, Any],
+    start_equity: Optional[float] = None
 ) -> None:
     """
     Log complete cycle summary using unified counters.
@@ -277,7 +319,121 @@ def log_cycle_summary(
     logger.info(format_position_breakdown(snapshot))
     
     # Daily summary
-    logger.info(format_daily_summary(ledger, session_metrics))
+    logger.info(format_daily_summary(ledger, session_metrics, snapshot, start_equity))
     
     # Validate consistency
     validate_counters_consistency(snapshot, committed_fills, ledger)
+
+
+def calculate_realized_pnl(ledger: Ledger) -> float:
+    """
+    Calculate realized P&L from closed positions using VWAP of fills.
+    
+    Args:
+        ledger: Trading ledger
+        
+    Returns:
+        Total realized P&L from closed positions
+    """
+    realized_pnl = 0.0
+    
+    # Group fills by symbol to identify closed positions
+    symbol_fills = {}
+    for fill in ledger.fills:
+        if fill.symbol not in symbol_fills:
+            symbol_fills[fill.symbol] = []
+        symbol_fills[fill.symbol].append(fill)
+    
+    # Calculate realized P&L for each symbol
+    for symbol, fills in symbol_fills.items():
+        # Check if position is closed (net quantity = 0)
+        net_qty = sum(fill.qty if fill.side == "BUY" else -fill.qty for fill in fills)
+        
+        if abs(net_qty) < 1e-8:  # Position is closed
+            # Calculate VWAP for buys and sells separately
+            buy_fills = [f for f in fills if f.side == "BUY"]
+            sell_fills = [f for f in fills if f.side == "SELL"]
+            
+            if buy_fills and sell_fills:
+                # Calculate VWAP for buys
+                buy_qty = sum(f.qty for f in buy_fills)
+                buy_vwap = sum(f.qty * f.price for f in buy_fills) / buy_qty if buy_qty > 0 else 0
+                
+                # Calculate VWAP for sells
+                sell_qty = sum(f.qty for f in sell_fills)
+                sell_vwap = sum(f.qty * f.price for f in sell_fills) / sell_qty if sell_qty > 0 else 0
+                
+                # Calculate realized P&L (sell VWAP - buy VWAP) * quantity
+                realized_pnl += (sell_vwap - buy_vwap) * min(buy_qty, sell_qty)
+                
+                # Subtract fees
+                total_fees = sum(f.fees for f in fills)
+                realized_pnl -= total_fees
+    
+    return realized_pnl
+
+
+def calculate_performance_metrics(ledger: Ledger, realized_pnl: float) -> tuple[str, str]:
+    """
+    Calculate profit factor and Sharpe ratio for closed trades.
+    
+    Args:
+        ledger: Trading ledger
+        realized_pnl: Total realized P&L
+        
+    Returns:
+        Tuple of (profit_factor, sharpe_ratio) as strings
+    """
+    # Group fills by symbol to identify closed positions
+    symbol_fills = {}
+    for fill in ledger.fills:
+        if fill.symbol not in symbol_fills:
+            symbol_fills[fill.symbol] = []
+        symbol_fills[fill.symbol].append(fill)
+    
+    trade_pnls = []
+    
+    # Calculate individual trade P&L for each closed position
+    for symbol, fills in symbol_fills.items():
+        net_qty = sum(fill.qty if fill.side == "BUY" else -fill.qty for fill in fills)
+        
+        if abs(net_qty) < 1e-8:  # Position is closed
+            buy_fills = [f for f in fills if f.side == "BUY"]
+            sell_fills = [f for f in fills if f.side == "SELL"]
+            
+            if buy_fills and sell_fills:
+                buy_qty = sum(f.qty for f in buy_fills)
+                buy_vwap = sum(f.qty * f.price for f in buy_fills) / buy_qty if buy_qty > 0 else 0
+                
+                sell_qty = sum(f.qty for f in sell_fills)
+                sell_vwap = sum(f.qty * f.price for f in sell_fills) / sell_qty if sell_qty > 0 else 0
+                
+                trade_pnl = (sell_vwap - buy_vwap) * min(buy_qty, sell_qty) - sum(f.fees for f in fills)
+                trade_pnls.append(trade_pnl)
+    
+    if not trade_pnls:
+        return "n/a", "n/a"
+    
+    # Calculate profit factor
+    gross_profit = sum(pnl for pnl in trade_pnls if pnl > 0)
+    gross_loss = abs(sum(pnl for pnl in trade_pnls if pnl < 0))
+    
+    if gross_loss == 0:
+        profit_factor = "∞" if gross_profit > 0 else "n/a"
+    else:
+        profit_factor = gross_profit / gross_loss
+    
+    # Calculate Sharpe ratio (simplified - using realized P&L as return)
+    if len(trade_pnls) < 2:
+        sharpe_ratio = "n/a"
+    else:
+        mean_return = sum(trade_pnls) / len(trade_pnls)
+        variance = sum((pnl - mean_return) ** 2 for pnl in trade_pnls) / (len(trade_pnls) - 1)
+        std_dev = variance ** 0.5
+        
+        if std_dev == 0:
+            sharpe_ratio = "∞" if mean_return > 0 else "n/a"
+        else:
+            sharpe_ratio = mean_return / std_dev
+    
+    return str(profit_factor), str(sharpe_ratio)

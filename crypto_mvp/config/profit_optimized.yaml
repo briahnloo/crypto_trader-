@@ -56,6 +56,37 @@ risk:
   enable_percent_fallback: true  # Enable percent-based SL/TP when ATR fails
   rr_min: 1.30                   # Minimum risk-reward ratio for regular trades
   rr_relax_for_pilot: 1.60       # Risk-reward ratio threshold for pilot trades
+  
+  # OCO (One-Cancels-Other) order management
+  oco_enabled: true              # Enable OCO orders after fills
+  tp_atr: 0.7                    # Take profit at 0.7 * ATR
+  sl_atr: 0.5                    # Stop loss at 0.5 * ATR
+  time_stop_minutes: 30          # Time stop: exit after 30 minutes if no TP/SL hit
+  trail_after_atr: 1.0           # Start trailing TP after +1 ATR in favor
+  trail_step_atr: 0.3            # Trail TP by 0.3 * ATR steps
+  
+  # Stop-loss cooldown
+  cooldown_after_sl_seconds: 180  # 5 minutes cooldown after stop-loss hit
+  
+  # Risk-per-trade sizing
+  risk_per_trade_pct: 0.10       # Risk 0.10% of equity per trade
+  allow_upsize: false            # Never increase position size beyond current default
+
+# Universe Configuration
+universe:
+  whitelist: [BTC/USDT, ETH/USDT, SOL/USDT]  # Only trade these liquid pairs
+
+# Market Data Configuration
+market_data:
+  max_spread_bps: 3              # Maximum spread in basis points (0.03%)
+  max_quote_age_ms: 200          # Maximum quote age in milliseconds
+  require_l2_mid: true           # Require top-of-book mid from same venue as execution
+
+# Enhanced Logging Configuration
+logging:
+  enhanced_execution_logs: true   # Enable detailed trade metrics logging
+  aggregation_interval: 50        # Print aggregated table every N trades
+  include_regime_analysis: true   # Include regime analysis in logs
 
 # Exchange Configuration
 exchanges:
@@ -231,6 +262,15 @@ signals:
     delay: 5  # seconds delay before execution
     retry_attempts: 3
     retry_delay: 10  # seconds
+  
+  # Regime-specific thresholds
+  regime:
+    trend: 
+      min_score: 0.50  # Minimum score for trend regime
+      min_rr: 1.4      # Minimum risk-reward ratio for trend regime
+    range:
+      min_score: 0.48  # Minimum score for range regime
+      min_rr: 1.2      # Minimum risk-reward ratio for range regime
 
 # Portfolio Management
 portfolio:
@@ -305,6 +345,19 @@ execution:
   max_retries: 3
   retry_delay: 5  # seconds
   timeout: 30  # seconds
+  
+  # Edge after costs guard
+  require_edge_after_costs: true  # Enable edge after costs guard
+  min_edge_after_costs_bps: 10  # Minimum 10 bps edge after costs
+  
+  # Fee configuration (in basis points)
+  maker_fee_bps: 10  # 0.1% maker fee
+  taker_fee_bps: 20  # 0.2% taker fee (used for worst-case guard)
+  
+  # Post-only order routing
+  post_only: true  # Use post-only limit orders at best bid/ask
+  post_only_max_wait_seconds: 5  # Maximum wait time for maker fills
+  allow_taker_fallback: false  # Do not convert to market orders if not filled
 
   # Order management
   order_management:

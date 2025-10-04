@@ -132,6 +132,34 @@ def get_atr(symbol: str, lookback: int = 14) -> Optional[float]:
     return None
 
 
+def get_atr_1m_60(symbol: str) -> Optional[float]:
+    """
+    Get ATR for 1-minute timeframe with 60 samples (1 hour of data).
+    
+    This is specifically for OCO order management.
+    
+    Args:
+        symbol: Trading symbol
+        
+    Returns:
+        ATR value for 1m/60 samples or None if not available
+    """
+    # Use specific cache key for 1m/60 ATR
+    cache_key = f"{symbol}_1m_60"
+    if cache_key in _atr_cache:
+        return _atr_cache[cache_key]
+    
+    # Calculate ATR for 1m timeframe with 60 samples
+    atr_value = _calculate_atr_1m_60(symbol)
+    
+    if atr_value and atr_value > 0:
+        # Cache the result
+        _atr_cache[cache_key] = atr_value
+        return atr_value
+    
+    return None
+
+
 def _calculate_atr(symbol: str, lookback: int) -> Optional[float]:
     """
     Calculate ATR from OHLCV data.
@@ -157,6 +185,40 @@ def _calculate_atr(symbol: str, lookback: int) -> Optional[float]:
         return None
     
     return mock_atr.get(symbol)
+
+
+def _calculate_atr_1m_60(symbol: str) -> Optional[float]:
+    """
+    Calculate ATR for 1-minute timeframe with 60 samples.
+    
+    This provides more responsive ATR values for OCO order management
+    compared to the standard 14-period ATR.
+    
+    Args:
+        symbol: Trading symbol
+        
+    Returns:
+        ATR value for 1m/60 samples or None if not available
+    """
+    # Mock ATR values for 1m/60 timeframe (more responsive than 14-period)
+    # These are typically smaller than the standard ATR due to shorter timeframe
+    mock_atr_1m_60 = {
+        "BTC/USDT": 500.0,   # ~1% of price (more responsive)
+        "ETH/USDT": 30.0,    # ~1% of price
+        "BNB/USDT": 3.0,     # ~1% of price
+        "ADA/USDT": 0.005,   # ~1% of price
+        "SOL/USDT": 1.0,     # ~1% of price
+        "DOT/USDT": 0.07,    # ~1% of price
+        "LINK/USDT": 0.15,   # ~1% of price
+        "UNI/USDT": 0.06,    # ~1% of price
+    }
+    
+    # Simulate occasional missing ATR data (lower failure rate for OCO)
+    import random
+    if random.random() < 0.1:  # 10% chance of missing ATR (lower than standard)
+        return None
+    
+    return mock_atr_1m_60.get(symbol)
 
 
 def clear_atr_cache():
@@ -208,3 +270,71 @@ def validate_price(price: Optional[float], symbol: str) -> bool:
         return False
     
     return True
+
+
+def get_ema(symbol: str, period: int) -> Optional[float]:
+    """
+    Get Exponential Moving Average for a symbol and period.
+    
+    This is a mock implementation for regime detection.
+    In a real system, this would calculate EMA from historical data.
+    
+    Args:
+        symbol: Trading symbol
+        period: EMA period (e.g., 50, 200)
+        
+    Returns:
+        EMA value or None if not available
+    """
+    # Mock EMA values for different symbols and periods
+    mock_emas = {
+        "BTC/USDT": {
+            50: 50100.0,   # Slightly above current price for trend
+            200: 49800.0   # Below EMA50 for trend condition
+        },
+        "ETH/USDT": {
+            50: 3010.0,    # Slightly above current price
+            200: 2980.0    # Below EMA50 for trend condition
+        },
+        "BNB/USDT": {
+            50: 302.0,     # Slightly above current price
+            200: 298.0     # Below EMA50 for trend condition
+        },
+        "ADA/USDT": {
+            50: 0.502,     # Slightly above current price
+            200: 0.498     # Below EMA50 for trend condition
+        },
+        "SOL/USDT": {
+            50: 101.0,     # Slightly above current price
+            200: 99.0      # Below EMA50 for trend condition
+        }
+    }
+    
+    return mock_emas.get(symbol, {}).get(period)
+
+
+def get_adx(symbol: str, period: int) -> Optional[float]:
+    """
+    Get Average Directional Index for a symbol and period.
+    
+    This is a mock implementation for regime detection.
+    In a real system, this would calculate ADX from historical data.
+    
+    Args:
+        symbol: Trading symbol
+        period: ADX period (e.g., 14)
+        
+    Returns:
+        ADX value or None if not available
+    """
+    # Mock ADX values for different symbols
+    # ADX > 20 indicates trend, ADX <= 20 indicates range
+    mock_adx_values = {
+        "BTC/USDT": 25.5,   # Above 20 for trend
+        "ETH/USDT": 18.2,   # Below 20 for range
+        "BNB/USDT": 22.1,   # Above 20 for trend
+        "ADA/USDT": 15.8,   # Below 20 for range
+        "SOL/USDT": 28.3    # Above 20 for trend
+    }
+    
+    return mock_adx_values.get(symbol)
