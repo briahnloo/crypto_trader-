@@ -1,0 +1,472 @@
+🚀 Crypto MVP - Profit-Maximizing Trading System
+============================================================
+📁 Config: config/profit_optimized.yaml
+💰 Mode: PAPER/SIMULATION
+🔄 Cycles: Continuous
+💵 Capital: $10,000.00
+🆔 Session ID: Auto-generated
+============================================================
+2025-10-04 09:02:09,970 - crypto_mvp - INFO - Starting Crypto MVP trading system
+🔄 Starting continuous trading...
+🆕 Generated session ID: 20251004-090209-3202
+2025-10-04 09:02:10,005 - ProfitMaximizingTradingSystem - INFO - Initializing ProfitMaximizingTradingSystem with session: 20251004-090209-3202...
+2025-10-04 09:02:10,006 - ProfitMaximizingTradingSystem - INFO - Configuration already loaded, using existing config
+2025-10-04 09:02:10,035 - ProfitOptimizedDataEngine - INFO - Initializing ProfitOptimizedDataEngine
+2025-10-04 09:02:10,035 - ProfitOptimizedDataEngine - INFO - Initialized connector: coinbase
+2025-10-04 09:02:10,035 - ProfitOptimizedDataEngine - INFO - Initialized connector: binance
+2025-10-04 09:02:10,035 - ProfitOptimizedDataEngine - INFO - Initialized connector: coingecko
+2025-10-04 09:02:10,035 - ProfitOptimizedDataEngine - INFO - Initialized connector: fear_greed
+2025-10-04 09:02:10,035 - ProfitOptimizedDataEngine - INFO - Initialized connector: social_sentiment
+2025-10-04 09:02:10,035 - ProfitOptimizedDataEngine - INFO - Initialized connector: news_sentiment
+2025-10-04 09:02:10,035 - ProfitOptimizedDataEngine - INFO - Initialized connector: whale_alert
+2025-10-04 09:02:10,035 - ProfitOptimizedDataEngine - INFO - Initialized connector: on_chain
+2025-10-04 09:02:10,035 - ProfitOptimizedDataEngine - INFO - ProfitOptimizedDataEngine initialized with 8 connectors
+2025-10-04 09:02:10,035 - ProfitMaximizingTradingSystem - INFO - Data engine initialized
+/Users/bzliu/anaconda3/lib/python3.10/site-packages/pandas/core/arrays/masked.py:61: UserWarning: Pandas requires version '1.3.6' or newer of 'bottleneck' (version '1.3.5' currently installed).
+  from pandas.core import (
+2025-10-04 09:02:10,288 - ProfitMaximizingTradingSystem - INFO - ATR service initialized
+2025-10-04 09:02:10,288 - ProfitMaximizingTradingSystem - INFO - Signal engine initialized
+2025-10-04 09:02:10,288 - ProfitMaximizingTradingSystem - INFO - Risk manager initialized
+2025-10-04 09:02:10,288 - ProfitMaximizingTradingSystem - INFO - Portfolio manager initialized
+2025-10-04 09:02:10,288 - ProfitMaximizingTradingSystem - INFO - Order manager initialized
+2025-10-04 09:02:10,288 - ProfitMaximizingTradingSystem - INFO - Multi-strategy executor initialized
+2025-10-04 09:02:10,288 - RegimeDetector - INFO - RegimeDetector initialized: trend_thresholds={'min_score': 0.5, 'min_rr': 1.4}, range_thresholds={'min_score': 0.48, 'min_rr': 1.2}
+2025-10-04 09:02:10,288 - RegimeDetector - INFO - Regime detector callbacks set
+2025-10-04 09:02:10,288 - ProfitMaximizingTradingSystem - INFO - Regime detector initialized
+2025-10-04 09:02:10,289 - ProfitMaximizingTradingSystem - INFO - Trade ledger initialized at trade_ledger.db
+2025-10-04 09:02:10,289 - ProfitMaximizingTradingSystem - INFO - Profit analytics initialized with trade ledger
+2025-10-04 09:02:10,289 - ProfitMaximizingTradingSystem - INFO - Profit logger initialized with trade ledger
+2025-10-04 09:02:10,290 - ProfitMaximizingTradingSystem - INFO - State store initialized
+2025-10-04 09:02:10,290 - ProfitMaximizingTradingSystem - INFO - State store set on signal engine for rolling windows
+2025-10-04 09:02:10,290 - ProfitMaximizingTradingSystem - INFO - State store and session ID set on order manager for budget enforcement
+All data cleared from StateStore
+2025-10-04 09:02:10,292 - ProfitMaximizingTradingSystem - INFO - Started fresh session 20251004-090209-3202: equity=$10,000.00
+2025-10-04 09:02:10,292 - ProfitMaximizingTradingSystem - INFO - Trading system initialization complete
+2025-10-04 09:02:10,292 - ProfitMaximizingTradingSystem - INFO - Starting trading system
+2025-10-04 09:02:10,292 - ProfitMaximizingTradingSystem - INFO - Starting trading cycle #1
+2025-10-04 09:02:10,292 - ProfitMaximizingTradingSystem - INFO - Step 1: Getting comprehensive market data
+2025-10-04 09:02:10,292 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=52049.99 for BTC/USDT
+2025-10-04 09:02:10,292 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=3952.79 for ETH/USDT
+2025-10-04 09:02:10,292 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=648.90 for BNB/USDT
+2025-10-04 09:02:10,292 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=0.64 for ADA/USDT
+2025-10-04 09:02:10,292 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=243.56 for SOL/USDT
+2025-10-04 09:02:10,295 - ProfitMaximizingTradingSystem - INFO - Retrieved market data for 5 symbols
+2025-10-04 09:02:10,295 - ProfitMaximizingTradingSystem - INFO - Step 1.5: Updating position prices
+2025-10-04 09:02:10,295 - ProfitMaximizingTradingSystem - INFO - Step 1.6: Checking risk-on triggers
+2025-10-04 09:02:10,297 - RegimeDetector - INFO - RISK-ON: BTC/USDT = False (reason=vol_ratio_below_threshold) ATR=599.5956 ATR_SMA=599.5956 vol_ratio=1.000 threshold=1.50
+2025-10-04 09:02:10,298 - RegimeDetector - INFO - RISK-ON: ETH/USDT = False (reason=vol_ratio_below_threshold) ATR=48.2841 ATR_SMA=48.2841 vol_ratio=1.000 threshold=1.50
+2025-10-04 09:02:10,300 - RegimeDetector - INFO - RISK-ON: BNB/USDT = False (reason=vol_ratio_below_threshold) ATR=7.2000 ATR_SMA=7.2000 vol_ratio=1.000 threshold=1.50
+2025-10-04 09:02:10,301 - RegimeDetector - INFO - RISK-ON: ADA/USDT = False (reason=vol_ratio_below_threshold) ATR=0.0074 ATR_SMA=0.0074 vol_ratio=1.000 threshold=1.50
+2025-10-04 09:02:10,302 - RegimeDetector - INFO - RISK-ON: SOL/USDT = False (reason=vol_ratio_below_threshold) ATR=2.6750 ATR_SMA=2.6750 vol_ratio=1.000 threshold=1.50
+2025-10-04 09:02:10,302 - ProfitMaximizingTradingSystem - INFO - Step 1.7: Checking daily loss limits
+2025-10-04 09:02:10,302 - ProfitMaximizingTradingSystem - INFO - Step 2: Generating trading signals
+2025-10-04 09:02:10,362 - ProfitMaximizingTradingSystem - INFO - Generated signals for 5 symbols
+2025-10-04 09:02:10,362 - ProfitMaximizingTradingSystem - INFO - BTC/USDT: score=0.900 [mom=0.00 brk=0.81 mr=0.19 arb=0.40 sent=0.52 vol=0.64 corr=0.71 whale=0.72 news=0.71] regime=unknown
+2025-10-04 09:02:10,362 - ProfitMaximizingTradingSystem - INFO - ETH/USDT: score=-0.376 [mom=-0.10 brk=0.56 mr=0.06 arb=0.00 sent=-0.69 vol=0.38 corr=-0.09 whale=0.67] regime=unknown
+2025-10-04 09:02:10,362 - ProfitMaximizingTradingSystem - INFO - Step 3: Executing profit-optimized trades
+2025-10-04 09:02:10,362 - ProfitMaximizingTradingSystem - INFO - TRADE_EXECUTION_START: 2025-10-04T09:02:10.362907
+2025-10-04 09:02:10.362 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for BTC/USDT (canonical: BTC/USDT)
+2025-10-04 09:02:10,363 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=52049.99 for BTC/USDT
+2025-10-04 09:02:10.363 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for BTC/USDT: $52049.9933 (source: bid_ask_mid)
+2025-10-04 09:02:10.363 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for ETH/USDT (canonical: ETH/USDT)
+2025-10-04 09:02:10,363 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=3952.79 for ETH/USDT
+2025-10-04 09:02:10.363 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for ETH/USDT: $3952.7935 (source: bid_ask_mid)
+2025-10-04 09:02:10.363 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for BNB/USDT (canonical: BNB/USDT)
+2025-10-04 09:02:10,363 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=648.90 for BNB/USDT
+2025-10-04 09:02:10.363 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for BNB/USDT: $648.8961 (source: bid_ask_mid)
+2025-10-04 09:02:10.363 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for ADA/USDT (canonical: ADA/USDT)
+2025-10-04 09:02:10,363 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=0.64 for ADA/USDT
+2025-10-04 09:02:10.363 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for ADA/USDT: $0.6447 (source: bid_ask_mid)
+2025-10-04 09:02:10.363 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for SOL/USDT (canonical: SOL/USDT)
+2025-10-04 09:02:10,363 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=243.56 for SOL/USDT
+2025-10-04 09:02:10.363 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for SOL/USDT: $243.5593 (source: bid_ask_mid)
+2025-10-04 09:02:10,363 - ProfitMaximizingTradingSystem - INFO - ENTRY SELECTOR: top_k enabled, K=2, floor=0.400, chosen=[BTC/USDT:0.900]
+2025-10-04 09:02:10,363 - ProfitMaximizingTradingSystem - INFO - Selected strategy: breakout (score: 0.193)
+2025-10-04 09:02:10.363 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BTC/USDT to canonical BTC/USDT
+2025-10-04 09:02:10.363 | INFO     | crypto_mvp.core.utils:log_mark_price_debounced:862 - mark_src=coinbase_last mark=52049.99 (cached)
+FAILED SLICE 1 BTC/USDT buy: PRECISION_FAIL: Quantity precision does not meet symbol requirements (qty=0.000961, price=52049.9933)
+2025-10-04 09:02:10,363 - ProfitMaximizingTradingSystem - INFO - REJECTED BTC/USDT BUY reason=no_execution
+2025-10-04 09:02:10,363 - ProfitMaximizingTradingSystem - INFO - 🔍 PILOT: No symbols met effective threshold, searching for pilot trade candidates
+2025-10-04 09:02:10.363 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for BTC/USDT (canonical: BTC/USDT)
+2025-10-04 09:02:10,363 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=52049.99 for BTC/USDT
+2025-10-04 09:02:10.363 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for BTC/USDT: $52049.9933 (source: bid_ask_mid)
+2025-10-04 09:02:10.363 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for ETH/USDT (canonical: ETH/USDT)
+2025-10-04 09:02:10,364 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=3952.79 for ETH/USDT
+2025-10-04 09:02:10.364 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for ETH/USDT: $3952.7935 (source: bid_ask_mid)
+2025-10-04 09:02:10.364 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for BNB/USDT (canonical: BNB/USDT)
+2025-10-04 09:02:10,364 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=648.90 for BNB/USDT
+2025-10-04 09:02:10.364 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for BNB/USDT: $648.8961 (source: bid_ask_mid)
+2025-10-04 09:02:10.364 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for ADA/USDT (canonical: ADA/USDT)
+2025-10-04 09:02:10,364 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=0.64 for ADA/USDT
+2025-10-04 09:02:10.364 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for ADA/USDT: $0.6447 (source: bid_ask_mid)
+2025-10-04 09:02:10.364 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for SOL/USDT (canonical: SOL/USDT)
+2025-10-04 09:02:10,364 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=243.56 for SOL/USDT
+2025-10-04 09:02:10.364 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for SOL/USDT: $243.5593 (source: bid_ask_mid)
+2025-10-04 09:02:10,364 - ProfitMaximizingTradingSystem - INFO - 🚁 PILOT: Selected BTC/USDT (score=0.900, RR=1.88)
+2025-10-04 09:02:10,364 - ProfitMaximizingTradingSystem - INFO - Selected strategy: breakout (score: 0.193)
+2025-10-04 09:02:10,364 - ProfitMaximizingTradingSystem - INFO - 🚁 PILOT: target_notional=$1500.00 * 0.4 = $600.00
+2025-10-04 09:02:10.364 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BTC/USDT to canonical BTC/USDT
+2025-10-04 09:02:10.364 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=52049.99 (cached, suppressed)
+FAILED SLICE 1 BTC/USDT buy: PRECISION_FAIL: Quantity precision does not meet symbol requirements (qty=0.000961, price=52049.9933)
+2025-10-04 09:02:10,364 - ProfitMaximizingTradingSystem - INFO - REJECTED PILOT BTC/USDT BUY reason=no_execution
+2025-10-04 09:02:10,364 - ProfitMaximizingTradingSystem - INFO - Executed 0 trades, total PnL: $0.00
+2025-10-04 09:02:10,364 - ProfitMaximizingTradingSystem - INFO - TRADE_EXECUTION_END: 2025-10-04T09:02:10.364617 duration=0.002s trades=0
+2025-10-04 09:02:10,364 - ProfitMaximizingTradingSystem - INFO - Step 3.5: Auto-managing exits
+2025-10-04 09:02:10,364 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=52049.99 for BTC/USDT
+2025-10-04 09:02:10,364 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=3952.79 for ETH/USDT
+2025-10-04 09:02:10,364 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=648.90 for BNB/USDT
+2025-10-04 09:02:10,364 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=0.64 for ADA/USDT
+2025-10-04 09:02:10,364 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=243.56 for SOL/USDT
+2025-10-04 09:02:10,364 - ProfitMaximizingTradingSystem - INFO - PORTFOLIO_UPDATE_START: 2025-10-04T09:02:10.364901
+2025-10-04 09:02:10,364 - ProfitMaximizingTradingSystem - INFO - Step 4: Updating portfolio
+2025-10-04 09:02:10,364 - ProfitMaximizingTradingSystem - INFO - PORTFOLIO_UPDATE_END: 2025-10-04T09:02:10.364946 duration=0.000s
+2025-10-04 09:02:10,364 - ProfitMaximizingTradingSystem - INFO - Step 5: Analytics and logging
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO - ================================================================================
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO - 📊 CYCLE #1 SUMMARY
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO - ================================================================================
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO - 💰 PORTFOLIO OVERVIEW:
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO -    Total Equity: $10,000.00
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO -    Cash Balance: $10,000.00
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO -    Position Value: $0.00
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO -    Unrealized P&L: $0.00
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO - 📈 TRADING ACTIVITY:
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO -    Trades Executed: 0
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO -    Cycle P&L: $0.00
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO -    Open Positions: 0
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO - 🎯 SIGNAL ANALYSIS:
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO -    Signals Generated: 5
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO - ⚡ PERFORMANCE:
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO -    Cycle Duration: 0.1s
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO -    Session ID: 20251004-090209-3202
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO - ✅ STATUS: No errors
+2025-10-04 09:02:10,365 - ProfitMaximizingTradingSystem - INFO - ================================================================================
+
+================================================================================
+🔄 TRADING CYCLE: cycle_1
+================================================================================
+📅 Time: 2025-10-04T09:02:10.292440
+💰 Symbol: PORTFOLIO
+🎯 Strategy: composite
+
+💎 EQUITY:
+   📈 Current: $10,000.00
+   📊 Previous: $10,000.00
+   💰 P&L: $0.00 (+0.00%)
+
+📋 POSITIONS:
+   🔢 Count: 0
+   💵 Total Value: $0.00
+
+🧠 DECISIONS:
+   🔢 Count: 4
+   🟡 Confidence: 70.0%
+   🟡 Risk Score: 30.0%
+   📝 signals_generated: 5
+   📝 trades_executed: 0
+
+💼 TRADES:
+   🔢 Count: 0
+   📊 Volume: $0.00
+   💸 Fees: $0.00
+================================================================================
+2025-10-04 09:02:10,367 - ProfitMaximizingTradingSystem - INFO - summary_src=ledger entries=0 trades_executed=0
+2025-10-04 09:02:10,367 - ProfitMaximizingTradingSystem - INFO - Trade count validation passed: 0 trades
+
+================================================================================
+📊 DAILY SUMMARY: 2025-10-04 (🆕 NEW SESSION)
+================================================================================
+
+📈 PERFORMANCE:
+   🔴 Win Rate: 0.0%
+   🔴 Sharpe Ratio: 0.000
+   🟢 Max Drawdown: 0.0%
+   💰 Total Return: 0.0%
+   📊 Profit Factor: 0.00
+   📈 Daily P&L: $0.00 (+0.00%)
+
+💼 TRADING ACTIVITY:
+   🔢 Total Trades: 0
+   🟢 Winning Trades: 0
+   🔴 Losing Trades: 0
+   📊 Total Volume: $0.00
+   💸 Total Fees: $0.00
+   📏 Avg Trade Size: $0.00
+
+💎 EQUITY:
+   🌅 Start: $10,000.00
+   🌆 End: $10,000.00
+   📈 Peak: $10,000.00
+
+⚠️  RISK METRICS:
+   📉 Current Drawdown: 0.0%
+   📊 Volatility: 2.0%
+   🎯 VaR (95%): 3.0%
+================================================================================
+2025-10-04 09:02:10,367 - ProfitMaximizingTradingSystem - INFO - Trading cycle #1 completed in 0.08s
+2025-10-04 09:02:10,367 - ProfitMaximizingTradingSystem - INFO - Portfolio equity: $10,000.00
+2025-10-04 09:02:10,367 - ProfitMaximizingTradingSystem - INFO - Available capital: $10,000.00
+2025-10-04 09:02:10,367 - ProfitMaximizingTradingSystem - INFO - Sleeping for 60 seconds until next cycle
+2025-10-04 09:03:10,371 - ProfitMaximizingTradingSystem - INFO - Starting trading cycle #2
+2025-10-04 09:03:10,371 - ProfitMaximizingTradingSystem - INFO - Step 1: Getting comprehensive market data
+2025-10-04 09:03:10,372 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=52049.99 for BTC/USDT
+2025-10-04 09:03:10,372 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=3952.79 for ETH/USDT
+2025-10-04 09:03:10,372 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=648.90 for BNB/USDT
+2025-10-04 09:03:10,372 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=0.64 for ADA/USDT
+2025-10-04 09:03:10,372 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=243.56 for SOL/USDT
+2025-10-04 09:03:10,374 - ProfitMaximizingTradingSystem - INFO - Retrieved market data for 5 symbols
+2025-10-04 09:03:10,374 - ProfitMaximizingTradingSystem - INFO - Step 1.5: Updating position prices
+2025-10-04 09:03:10,376 - ProfitMaximizingTradingSystem - INFO - Step 1.6: Checking risk-on triggers
+2025-10-04 09:03:10,381 - RegimeDetector - INFO - RISK-ON: BTC/USDT = False (reason=vol_ratio_below_threshold) ATR=599.5956 ATR_SMA=599.5956 vol_ratio=1.000 threshold=1.50
+2025-10-04 09:03:10,382 - RegimeDetector - INFO - RISK-ON: ETH/USDT = False (reason=vol_ratio_below_threshold) ATR=48.2841 ATR_SMA=48.2841 vol_ratio=1.000 threshold=1.50
+2025-10-04 09:03:10,384 - RegimeDetector - INFO - RISK-ON: BNB/USDT = False (reason=vol_ratio_below_threshold) ATR=7.2000 ATR_SMA=7.2000 vol_ratio=1.000 threshold=1.50
+2025-10-04 09:03:10,385 - RegimeDetector - INFO - RISK-ON: ADA/USDT = False (reason=vol_ratio_below_threshold) ATR=0.0074 ATR_SMA=0.0074 vol_ratio=1.000 threshold=1.50
+2025-10-04 09:03:10,386 - RegimeDetector - INFO - RISK-ON: SOL/USDT = False (reason=vol_ratio_below_threshold) ATR=2.6750 ATR_SMA=2.6750 vol_ratio=1.000 threshold=1.50
+2025-10-04 09:03:10,386 - ProfitMaximizingTradingSystem - INFO - Step 1.7: Checking daily loss limits
+2025-10-04 09:03:10,386 - ProfitMaximizingTradingSystem - INFO - Step 2: Generating trading signals
+2025-10-04 09:03:10,444 - ProfitMaximizingTradingSystem - INFO - Generated signals for 5 symbols
+2025-10-04 09:03:10,444 - ProfitMaximizingTradingSystem - INFO - ETH/USDT: score=-0.639 [mom=-0.50 brk=0.01 mr=-0.05 arb=0.00 sent=0.35 vol=0.12 corr=-0.19 whale=0.68 news=0.30] regime=unknown
+2025-10-04 09:03:10,444 - ProfitMaximizingTradingSystem - INFO - BNB/USDT: score=-0.635 [mom=-0.30 brk=0.22 mr=-0.34 arb=0.00 sent=-0.78 vol=0.51 corr=0.28 whale=0.36] regime=unknown
+2025-10-04 09:03:10,444 - ProfitMaximizingTradingSystem - INFO - Step 3: Executing profit-optimized trades
+2025-10-04 09:03:10,444 - ProfitMaximizingTradingSystem - INFO - TRADE_EXECUTION_START: 2025-10-04T09:03:10.444257
+2025-10-04 09:03:10.444 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for BTC/USDT (canonical: BTC/USDT)
+2025-10-04 09:03:10,444 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=52049.99 for BTC/USDT
+2025-10-04 09:03:10.444 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for BTC/USDT: $52049.9933 (source: bid_ask_mid)
+2025-10-04 09:03:10.444 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for ETH/USDT (canonical: ETH/USDT)
+2025-10-04 09:03:10,444 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=3952.79 for ETH/USDT
+2025-10-04 09:03:10.444 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for ETH/USDT: $3952.7935 (source: bid_ask_mid)
+2025-10-04 09:03:10.444 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for BNB/USDT (canonical: BNB/USDT)
+2025-10-04 09:03:10,444 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=648.90 for BNB/USDT
+2025-10-04 09:03:10.444 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for BNB/USDT: $648.8961 (source: bid_ask_mid)
+2025-10-04 09:03:10.444 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for ADA/USDT (canonical: ADA/USDT)
+2025-10-04 09:03:10,444 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=0.64 for ADA/USDT
+2025-10-04 09:03:10.444 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for ADA/USDT: $0.6447 (source: bid_ask_mid)
+2025-10-04 09:03:10.444 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for SOL/USDT (canonical: SOL/USDT)
+2025-10-04 09:03:10,445 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=243.56 for SOL/USDT
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for SOL/USDT: $243.5593 (source: bid_ask_mid)
+2025-10-04 09:03:10,445 - ProfitMaximizingTradingSystem - INFO - ENTRY SELECTOR: top_k enabled, K=2, floor=0.400, chosen=[ETH/USDT:0.639, BNB/USDT:0.635]
+2025-10-04 09:03:10,445 - ProfitMaximizingTradingSystem - INFO - Selected strategy: sentiment (score: 0.098)
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.445 | INFO     | crypto_mvp.core.utils:log_mark_price_debounced:862 - mark_src=coinbase_last mark=3952.79 (cached)
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.445 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10,446 - ProfitMaximizingTradingSystem - ERROR - Invalid entry_price: 0 for ETH/USDT. Rejecting trade.
+2025-10-04 09:03:10,446 - ProfitMaximizingTradingSystem - INFO - REJECTED ETH/USDT SELL reason=portfolio_update_failed
+2025-10-04 09:03:10,446 - ProfitMaximizingTradingSystem - INFO - Selected strategy: sentiment (score: 0.068)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.446 | INFO     | crypto_mvp.core.utils:log_mark_price_debounced:862 - mark_src=coinbase_last mark=648.90 (cached)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.446 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted BNB/USDT to canonical BNB/USDT
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=648.90 (cached, suppressed)
+2025-10-04 09:03:10,447 - ProfitMaximizingTradingSystem - ERROR - Invalid entry_price: 0 for BNB/USDT. Rejecting trade.
+2025-10-04 09:03:10,447 - ProfitMaximizingTradingSystem - INFO - REJECTED BNB/USDT SELL reason=portfolio_update_failed
+2025-10-04 09:03:10,447 - ProfitMaximizingTradingSystem - INFO - 🔍 PILOT: No symbols met effective threshold, searching for pilot trade candidates
+2025-10-04 09:03:10.447 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for BTC/USDT (canonical: BTC/USDT)
+2025-10-04 09:03:10,448 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=52049.99 for BTC/USDT
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for BTC/USDT: $52049.9933 (source: bid_ask_mid)
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for ETH/USDT (canonical: ETH/USDT)
+2025-10-04 09:03:10,448 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=3952.79 for ETH/USDT
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for ETH/USDT: $3952.7935 (source: bid_ask_mid)
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for BNB/USDT (canonical: BNB/USDT)
+2025-10-04 09:03:10,448 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=648.90 for BNB/USDT
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for BNB/USDT: $648.8961 (source: bid_ask_mid)
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for ADA/USDT (canonical: ADA/USDT)
+2025-10-04 09:03:10,448 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=0.64 for ADA/USDT
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for ADA/USDT: $0.6447 (source: bid_ask_mid)
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_entry_price:706 - Getting entry price for SOL/USDT (canonical: SOL/USDT)
+2025-10-04 09:03:10,448 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=243.56 for SOL/USDT
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_entry_price:749 - Entry price for SOL/USDT: $243.5593 (source: bid_ask_mid)
+2025-10-04 09:03:10,448 - ProfitMaximizingTradingSystem - INFO - 🚁 PILOT: Selected ETH/USDT (score=-0.639, RR=1.88)
+2025-10-04 09:03:10,448 - ProfitMaximizingTradingSystem - INFO - Selected strategy: sentiment (score: 0.098)
+2025-10-04 09:03:10,448 - ProfitMaximizingTradingSystem - INFO - 🚁 PILOT: target_notional=$1500.00 * 0.4 = $600.00
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.448 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:get_mark_price:583 - Converted ETH/USDT to canonical ETH/USDT
+2025-10-04 09:03:10.449 | DEBUG    | crypto_mvp.core.utils:log_mark_price_debounced:865 - mark_src=coinbase_last mark=3952.79 (cached, suppressed)
+2025-10-04 09:03:10,449 - ProfitMaximizingTradingSystem - ERROR - Invalid entry_price: 0 for ETH/USDT. Rejecting trade.
+2025-10-04 09:03:10,449 - ProfitMaximizingTradingSystem - INFO - REJECTED PILOT ETH/USDT SELL reason=portfolio_update_failed
+2025-10-04 09:03:10,449 - ProfitMaximizingTradingSystem - INFO - Executed 0 trades, total PnL: $0.00
+2025-10-04 09:03:10,449 - ProfitMaximizingTradingSystem - INFO - TRADE_EXECUTION_END: 2025-10-04T09:03:10.449498 duration=0.005s trades=0
+2025-10-04 09:03:10,449 - ProfitMaximizingTradingSystem - INFO - Step 3.5: Auto-managing exits
+2025-10-04 09:03:10,449 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=52049.99 for BTC/USDT
+2025-10-04 09:03:10,449 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=3952.79 for ETH/USDT
+2025-10-04 09:03:10,449 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=648.90 for BNB/USDT
+2025-10-04 09:03:10,449 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=0.64 for ADA/USDT
+2025-10-04 09:03:10,449 - ProfitOptimizedDataEngine - INFO - mark_src=coinbase_last mark=243.56 for SOL/USDT
+2025-10-04 09:03:10,449 - ProfitMaximizingTradingSystem - INFO - PORTFOLIO_UPDATE_START: 2025-10-04T09:03:10.449815
+2025-10-04 09:03:10,449 - ProfitMaximizingTradingSystem - INFO - Step 4: Updating portfolio
+2025-10-04 09:03:10,449 - ProfitMaximizingTradingSystem - INFO - PORTFOLIO_UPDATE_END: 2025-10-04T09:03:10.449864 duration=0.000s
+2025-10-04 09:03:10,449 - ProfitMaximizingTradingSystem - INFO - Step 5: Analytics and logging
+2025-10-04 09:03:10,449 - ProfitMaximizingTradingSystem - INFO - ================================================================================
+2025-10-04 09:03:10,449 - ProfitMaximizingTradingSystem - INFO - 📊 CYCLE #2 SUMMARY
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO - ================================================================================
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO - 💰 PORTFOLIO OVERVIEW:
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO -    Total Equity: $10,000.00
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO -    Cash Balance: $10,000.00
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO -    Position Value: $0.00
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO -    Unrealized P&L: $0.00
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO - 📈 TRADING ACTIVITY:
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO -    Trades Executed: 0
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO -    Cycle P&L: $0.00
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO -    Open Positions: 0
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO - 🎯 SIGNAL ANALYSIS:
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO -    Signals Generated: 5
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO - ⚡ PERFORMANCE:
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO -    Cycle Duration: 0.1s
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO -    Session ID: 20251004-090209-3202
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO - ✅ STATUS: No errors
+2025-10-04 09:03:10,450 - ProfitMaximizingTradingSystem - INFO - ================================================================================
+
+================================================================================
+🔄 TRADING CYCLE: cycle_2
+================================================================================
+📅 Time: 2025-10-04T09:03:10.370819
+💰 Symbol: PORTFOLIO
+🎯 Strategy: composite
+
+💎 EQUITY:
+   📈 Current: $10,000.00
+   📊 Previous: $10,000.00
+   💰 P&L: $0.00 (+0.00%)
+
+📋 POSITIONS:
+   🔢 Count: 0
+   💵 Total Value: $0.00
+
+🧠 DECISIONS:
+   🔢 Count: 4
+   🟡 Confidence: 70.0%
+   🟡 Risk Score: 30.0%
+   📝 signals_generated: 5
+   📝 trades_executed: 0
+
+💼 TRADES:
+   🔢 Count: 0
+   📊 Volume: $0.00
+   💸 Fees: $0.00
+================================================================================
+
+================================================================================
+📊 DAILY SUMMARY: 2025-10-04 (🆕 NEW SESSION)
+================================================================================
+
+📈 PERFORMANCE:
+   🔴 Win Rate: 0.0%
+   🔴 Sharpe Ratio: 0.000
+   🟢 Max Drawdown: 0.0%
+   💰 Total Return: 0.0%
+   📊 Profit Factor: 0.00
+   📈 Daily P&L: $0.00 (+0.00%)
+
+💼 TRADING ACTIVITY:
+   🔢 Total Trades: 0
+   🟢 Winning Trades: 0
+   🔴 Losing Trades: 0
+   📊 Total Volume: $0.00
+   💸 Total Fees: $0.00
+   📏 Avg Trade Size: $0.00
+
+💎 EQUITY:
+   🌅 Start: $10,000.00
+   🌆 End: $10,000.00
+   📈 Peak: $10,000.00
+
+⚠️  RISK METRICS:
+   📉 Current Drawdown: 0.0%
+   📊 Volatility: 2.0%
+   🎯 VaR (95%): 3.0%
+================================================================================
+2025-10-04 09:03:10,452 - ProfitMaximizingTradingSystem - INFO - Trading cycle #2 completed in 0.08s
+2025-10-04 09:03:10,452 - ProfitMaximizingTradingSystem - INFO - Portfolio equity: $10,000.00
+2025-10-04 09:03:10,452 - ProfitMaximizingTradingSystem - INFO - Available capital: $10,000.00
+2025-10-04 09:03:10,453 - ProfitMaximizingTradingSystem - INFO - Sleeping for 60 seconds until next cycle

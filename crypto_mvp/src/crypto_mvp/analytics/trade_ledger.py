@@ -48,6 +48,7 @@ class TradeLedger(LoggerMixin):
                         fees REAL NOT NULL,
                         notional_value REAL NOT NULL,
                         strategy TEXT NOT NULL,
+                        exit_reason TEXT,
                         executed_at TIMESTAMP NOT NULL,
                         date TEXT NOT NULL,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -70,11 +71,32 @@ class TradeLedger(LoggerMixin):
                     ON trades(symbol)
                 """)
                 
+                # Run migrations for existing databases
+                self._run_migrations(cursor)
+                
                 conn.commit()
                 self.logger.info(f"Trade ledger database initialized at {self.db_path}")
                 
         except Exception as e:
             self.logger.error(f"Failed to initialize trade ledger database: {e}")
+            raise
+    
+    def _run_migrations(self, cursor) -> None:
+        """Run database migrations for schema updates."""
+        try:
+            # Check if exit_reason column exists
+            cursor.execute("PRAGMA table_info(trades)")
+            columns = [row[1] for row in cursor.fetchall()]
+            
+            if 'exit_reason' not in columns:
+                self.logger.info("Adding exit_reason column to trades table")
+                cursor.execute("ALTER TABLE trades ADD COLUMN exit_reason TEXT")
+                self.logger.info("Successfully added exit_reason column")
+            else:
+                self.logger.debug("exit_reason column already exists")
+                
+        except Exception as e:
+            self.logger.error(f"Failed to run migrations: {e}")
             raise
     
     def commit_fill(
@@ -87,6 +109,7 @@ class TradeLedger(LoggerMixin):
         fill_price: float,
         fees: float,
         strategy: str = "unknown",
+        exit_reason: Optional[str] = None,
         executed_at: Optional[datetime] = None
     ) -> bool:
         """Commit a fill to the trade ledger.
@@ -100,6 +123,7 @@ class TradeLedger(LoggerMixin):
             fill_price: Fill price
             fees: Trading fees
             strategy: Strategy name
+            exit_reason: Exit reason for exit orders (optional)
             executed_at: Execution timestamp (defaults to now)
             
         Returns:
@@ -118,16 +142,34 @@ class TradeLedger(LoggerMixin):
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
-                # Insert trade record
-                cursor.execute("""
-                    INSERT OR REPLACE INTO trades (
+                # Check if exit_reason column exists
+                cursor.execute("PRAGMA table_info(trades)")
+                columns = [row[1] for row in cursor.fetchall()]
+                has_exit_reason = 'exit_reason' in columns
+                
+                if has_exit_reason:
+                    # Insert trade record with exit_reason
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO trades (
+                            trade_id, session_id, symbol, side, quantity, fill_price,
+                            fees, notional_value, strategy, exit_reason, executed_at, date
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
                         trade_id, session_id, symbol, side, quantity, fill_price,
-                        fees, notional_value, strategy, executed_at, date
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    trade_id, session_id, symbol, side, quantity, fill_price,
-                    fees, notional_value, strategy, executed_at.isoformat(), trade_date
-                ))
+                        fees, notional_value, strategy, exit_reason, executed_at.isoformat(), trade_date
+                    ))
+                else:
+                    # Fallback: insert without exit_reason column
+                    self.logger.warning("exit_reason column missing, inserting without exit_reason")
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO trades (
+                            trade_id, session_id, symbol, side, quantity, fill_price,
+                            fees, notional_value, strategy, executed_at, date
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        trade_id, session_id, symbol, side, quantity, fill_price,
+                        fees, notional_value, strategy, executed_at.isoformat(), trade_date
+                    ))
                 
                 conn.commit()
                 
@@ -209,23 +251,122 @@ class TradeLedger(LoggerMixin):
         """
         return self.get_trades_by_session_and_date(session_id, date)
     
+    def get_trades_by_session(self, session_id: str) -> List[Dict[str, Any]]:
+        """Get all trades for a session.
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            List of trade records for the session
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT * FROM trades 
+                    WHERE session_id = ? 
+                    ORDER BY executed_at DESC
+                """, (session_id,))
+                
+                return [dict(row) for row in cursor.fetchall()]
+                
+        except Exception as e:
+            self.logger.error(f"Failed to get trades by session: {e}")
+            return []
+    
+    def get_trades_by_date(self, date: str) -> List[Dict[str, Any]]:
+        """Get all trades for a date.
+        
+        Args:
+            date: Date in YYYY-MM-DD format
+            
+        Returns:
+            List of trade records for the date
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT * FROM trades 
+                    WHERE date = ? 
+                    ORDER BY executed_at DESC
+                """, (date,))
+                
+                return [dict(row) for row in cursor.fetchall()]
+                
+        except Exception as e:
+            self.logger.error(f"Failed to get trades by date: {e}")
+            return []
+    
+    def get_all_trades(self) -> List[Dict[str, Any]]:
+        """Get all trades.
+        
+        Returns:
+            List of all trade records
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT * FROM trades 
+                    ORDER BY executed_at DESC
+                """)
+                
+                return [dict(row) for row in cursor.fetchall()]
+                
+        except Exception as e:
+            self.logger.error(f"Failed to get all trades: {e}")
+            return []
+    
     def calculate_daily_metrics(
         self, 
-        session_id: str, 
-        date: str
+        date: str = None, 
+        session_id: str = None
     ) -> Dict[str, Any]:
         """Calculate daily trading metrics from ledger.
         
         Args:
-            session_id: Session identifier
-            date: Date in YYYY-MM-DD format
+            date: Date in YYYY-MM-DD format (None for all dates)
+            session_id: Session identifier (None for all sessions)
             
         Returns:
             Dictionary with daily metrics
         """
-        trades = self.get_daily_trades(session_id, date)
+        if date and session_id:
+            # Get trades for specific date and session
+            trades = self.get_daily_trades(session_id, date)
+        elif session_id:
+            # Get all trades for session (all dates)
+            trades = self.get_trades_by_session(session_id)
+        elif date:
+            # Get all trades for date (all sessions)
+            trades = self.get_trades_by_date(date)
+        else:
+            # Get all trades
+            trades = self.get_all_trades()
         
-        if not trades:
+        # Filter out invalid trades (qty <= 0, price <= 0, or not committed)
+        valid_trades = []
+        for trade in trades:
+            quantity = trade.get('quantity', 0)
+            fill_price = trade.get('fill_price', 0)
+            # All trades in ledger are committed by definition
+            committed = True
+            
+            # Skip invalid trades
+            if quantity <= 0 or fill_price <= 0 or not committed:
+                continue
+                
+            valid_trades.append(trade)
+        
+        if not valid_trades:
             return {
                 "total_trades": 0,
                 "total_volume": 0.0,
@@ -243,19 +384,36 @@ class TradeLedger(LoggerMixin):
                 "session_id": session_id
             }
         
-        # Calculate metrics
-        total_trades = len(trades)
-        total_volume = sum(abs(trade['quantity']) for trade in trades)
-        total_fees = sum(trade['fees'] for trade in trades)
-        total_notional = sum(trade['notional_value'] for trade in trades)
+        # Calculate metrics using only valid trades
+        total_trades = len(valid_trades)
         
-        buy_trades = len([t for t in trades if t['side'].lower() == 'buy'])
-        sell_trades = len([t for t in trades if t['side'].lower() == 'sell'])
+        # Separate new exposure trades (non-reduce-only) from all trades
+        new_exposure_trades = []
+        for trade in valid_trades:
+            # Check if this is a reduce-only exit (from metadata or exit_reason)
+            is_reduce_only = (
+                trade.get('exit_reason') is not None or  # Has exit reason
+                trade.get('metadata', {}).get('reduce_only', False) or  # Marked as reduce-only
+                trade.get('metadata', {}).get('exit_action', False)  # Marked as exit action
+            )
+            
+            if not is_reduce_only:
+                new_exposure_trades.append(trade)
         
-        symbols_traded = list(set(trade['symbol'] for trade in trades))
-        strategies_used = list(set(trade['strategy'] for trade in trades))
+        # Volume and notional: only count new exposure (exclude reduce-only exits)
+        total_volume = sum(abs(trade['quantity']) for trade in new_exposure_trades)
+        total_notional = sum(trade['notional_value'] for trade in new_exposure_trades)
         
-        trade_sizes = [abs(trade['quantity']) for trade in trades]
+        # Fees: count from all fills (including reduce-only exits)
+        total_fees = sum(trade['fees'] for trade in valid_trades)
+        
+        buy_trades = len([t for t in valid_trades if t['side'].lower() == 'buy'])
+        sell_trades = len([t for t in valid_trades if t['side'].lower() == 'sell'])
+        
+        symbols_traded = list(set(trade['symbol'] for trade in valid_trades))
+        strategies_used = list(set(trade['strategy'] for trade in valid_trades))
+        
+        trade_sizes = [abs(trade['quantity']) for trade in valid_trades]
         avg_trade_size = sum(trade_sizes) / len(trade_sizes) if trade_sizes else 0.0
         largest_trade = max(trade_sizes) if trade_sizes else 0.0
         smallest_trade = min(trade_sizes) if trade_sizes else 0.0

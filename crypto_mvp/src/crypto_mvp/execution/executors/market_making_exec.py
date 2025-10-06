@@ -213,7 +213,7 @@ class MarketMakingExecutor(LoggerMixin):
 
         try:
             # Create bid order
-            bid_order_id = self.order_manager.create_order(
+            bid_order, bid_error = self.order_manager.create_order(
                 symbol=symbol,
                 side=OrderSide.BUY,
                 order_type=OrderType.LIMIT,
@@ -227,7 +227,7 @@ class MarketMakingExecutor(LoggerMixin):
             )
 
             # Create ask order
-            ask_order_id = self.order_manager.create_order(
+            ask_order, ask_error = self.order_manager.create_order(
                 symbol=symbol,
                 side=OrderSide.SELL,
                 order_type=OrderType.LIMIT,
@@ -240,12 +240,20 @@ class MarketMakingExecutor(LoggerMixin):
                 },
             )
 
+            # Check if both orders were created successfully
+            if not bid_order:
+                self.logger.warning(f"Failed to create bid order: {bid_error}")
+                return orders_created
+            if not ask_order:
+                self.logger.warning(f"Failed to create ask order: {ask_error}")
+                return orders_created
+
             # Submit orders
-            bid_success = self.order_manager.submit_order(bid_order_id)
-            ask_success = self.order_manager.submit_order(ask_order_id)
+            bid_success = self.order_manager.submit_order(bid_order.id)
+            ask_success = self.order_manager.submit_order(ask_order.id)
 
             if bid_success and ask_success:
-                orders_created = [bid_order_id, ask_order_id]
+                orders_created = [bid_order.id, ask_order.id]
 
                 # Track orders
                 if symbol not in self.active_orders:

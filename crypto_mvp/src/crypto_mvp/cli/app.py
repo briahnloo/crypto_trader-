@@ -7,9 +7,9 @@ import asyncio
 import sys
 from pathlib import Path
 
-from ..core.config_manager import ConfigManager
-from ..core.logging_utils import get_logger
-from ..trading_system import ProfitMaximizingTradingSystem
+from crypto_mvp.core.config_manager import ConfigManager
+from crypto_mvp.core.logging_utils import get_logger
+from crypto_mvp.trading_system import ProfitMaximizingTradingSystem
 
 
 def create_argument_parser() -> argparse.ArgumentParser:

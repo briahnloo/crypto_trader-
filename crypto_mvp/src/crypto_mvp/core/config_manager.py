@@ -56,6 +56,42 @@ class ConfigManager:
         except yaml.YAMLError as e:
             raise ValueError(f"Invalid YAML configuration: {e}") from e
 
+
+    def _validate_live_trading_safeguards(self, config: dict) -> None:
+        """Validate live trading safeguards configuration.
+        
+        Args:
+            config: Configuration dictionary
+        """
+        safeguards = config.get("live_trading_safeguards", {})
+        
+        # Validate paper trading mode
+        paper_trading = safeguards.get("paper_trading_mode", True)
+        if not isinstance(paper_trading, bool):
+            raise ValueError("paper_trading_mode must be a boolean")
+        
+        # Validate position limits
+        position_limits = safeguards.get("position_limits", {})
+        max_position_size_pct = position_limits.get("max_position_size_pct", 0.01)
+        if not 0 < max_position_size_pct <= 0.1:  # 0% to 10%
+            raise ValueError("max_position_size_pct must be between 0 and 0.1 (0% to 10%)")
+        
+        # Validate session limits
+        session_limits = safeguards.get("session_limits", {})
+        max_trades_per_day = session_limits.get("max_trades_per_day", 10)
+        if not 1 <= max_trades_per_day <= 100:
+            raise ValueError("max_trades_per_day must be between 1 and 100")
+        
+        # Validate monitoring configuration
+        monitoring = safeguards.get("monitoring", {})
+        if monitoring.get("enabled", True):
+            alert_thresholds = monitoring.get("alert_thresholds", {})
+            equity_change_pct = alert_thresholds.get("equity_change_pct", 2.0)
+            if not 0.1 <= equity_change_pct <= 50.0:
+                raise ValueError("equity_change_pct must be between 0.1 and 50.0")
+        
+        self.logger.info("Live trading safeguards configuration validated successfully")
+
     def _validate_config(self) -> None:
         """Validate configuration against schema."""
         if self._config is None:
@@ -100,8 +136,17 @@ class ConfigManager:
 
         # Replace environment variable placeholders
         if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
-            env_var = value[2:-1]
-            return os.getenv(env_var, default)
+            env_var_expr = value[2:-1]
+            
+            # Handle default value syntax: ${VAR:-default}
+            if ":-" in env_var_expr:
+                env_var, default_val = env_var_expr.split(":-", 1)
+                env_var = env_var.strip()
+                default_val = default_val.strip()
+                return os.getenv(env_var, default_val)
+            else:
+                # Simple environment variable: ${VAR}
+                return os.getenv(env_var_expr, default)
 
         return value
 

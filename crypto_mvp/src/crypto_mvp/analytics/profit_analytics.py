@@ -51,6 +51,75 @@ class ProfitAnalytics(LoggerMixin):
         self.session_id = None
 
         self.initialized = False
+        
+        # Trade ledger reference (will be set by trading system)
+        self.trade_ledger = None
+
+    def set_trade_ledger(self, trade_ledger) -> None:
+        """Set the trade ledger reference for single source of truth.
+        
+        Args:
+            trade_ledger: TradeLedger instance
+        """
+        self.trade_ledger = trade_ledger
+        self.logger.info("Trade ledger set for single source of truth")
+
+    def get_metrics_from_ledger(self, session_id: str = None) -> dict[str, Any]:
+        """Get all metrics from trade ledger as single source of truth.
+        
+        Args:
+            session_id: Session ID to filter by (optional)
+            
+        Returns:
+            Dictionary with all metrics from committed trades only
+        """
+        if not self.trade_ledger:
+            self.logger.warning("No trade ledger available, returning empty metrics")
+            return {
+                "total_trades": 0,
+                "total_volume": 0.0,
+                "total_fees": 0.0,
+                "total_notional": 0.0,
+                "buy_trades": 0,
+                "sell_trades": 0,
+                "symbols_traded": [],
+                "strategies_used": [],
+                "win_rate": 0.0,
+                "avg_trade_size": 0.0,
+                "largest_trade": 0.0,
+                "smallest_trade": 0.0
+            }
+        
+        try:
+            # Get daily metrics from ledger (committed trades only)
+            if session_id:
+                # Get session-specific metrics
+                daily_metrics = self.trade_ledger.calculate_daily_metrics(
+                    date=None,  # All dates
+                    session_id=session_id
+                )
+            else:
+                # Get all-time metrics
+                daily_metrics = self.trade_ledger.calculate_daily_metrics()
+            
+            return daily_metrics
+            
+        except Exception as e:
+            self.logger.error(f"Error getting metrics from ledger: {e}")
+            return {
+                "total_trades": 0,
+                "total_volume": 0.0,
+                "total_fees": 0.0,
+                "total_notional": 0.0,
+                "buy_trades": 0,
+                "sell_trades": 0,
+                "symbols_traded": [],
+                "strategies_used": [],
+                "win_rate": 0.0,
+                "avg_trade_size": 0.0,
+                "largest_trade": 0.0,
+                "smallest_trade": 0.0
+            }
 
     def initialize(self, session_id: Optional[str] = None) -> None:
         """Initialize the profit analytics system for a specific session.
@@ -222,7 +291,7 @@ class ProfitAnalytics(LoggerMixin):
         pnl = trade_record["pnl"]
 
         # Update counters
-        self.total_trades += 1
+        # Note: total_trades now comes from trade ledger as single source of truth
         self.total_pnl += pnl
 
         if pnl > 0:
@@ -555,9 +624,23 @@ class ProfitAnalytics(LoggerMixin):
         total_wins = 0.0
         total_losses = 0.0
         if trades:
-            total_wins = sum(trade.get("pnl", 0.0) for trade in trades if trade.get("pnl", 0.0) > 0)
+            # Filter out invalid trades (qty <= 0, price <= 0, or not committed)
+            valid_trades = []
+            for trade in trades:
+                quantity = trade.get('quantity', 0)
+                price = trade.get('entry_price', trade.get('price', 0))
+                committed = trade.get('committed', True)  # Default to True for backward compatibility
+                
+                # Skip invalid trades
+                if quantity <= 0 or price <= 0 or not committed:
+                    continue
+                    
+                valid_trades.append(trade)
+            
+            # Use only valid trades for calculations
+            total_wins = sum(trade.get("pnl", 0.0) for trade in valid_trades if trade.get("pnl", 0.0) > 0)
             total_losses = sum(
-                abs(trade.get("pnl", 0.0)) for trade in trades if trade.get("pnl", 0.0) < 0
+                abs(trade.get("pnl", 0.0)) for trade in valid_trades if trade.get("pnl", 0.0) < 0
             )
         
         profit_factor = (
@@ -597,25 +680,45 @@ class ProfitAnalytics(LoggerMixin):
         worst_trade = None
         
         if trades:
-            max_win = max(trade.get("pnl", 0.0) for trade in trades)
-            max_loss = min(trade.get("pnl", 0.0) for trade in trades)
-            total_fees = sum(trade.get("fees", 0.0) for trade in trades)
-            total_trade_volume = sum(
-                trade.get("quantity", 0.0) * trade.get("entry_price", 0.0) for trade in trades
-            )
-            best_trade = max(trades, key=lambda x: x.get("pnl", 0.0))
-            worst_trade = min(trades, key=lambda x: x.get("pnl", 0.0))
+            # Use valid_trades if we already filtered them, otherwise filter now
+            if 'valid_trades' in locals():
+                trades_to_use = valid_trades
+            else:
+                # Filter out invalid trades
+                trades_to_use = []
+                for trade in trades:
+                    quantity = trade.get('quantity', 0)
+                    price = trade.get('entry_price', trade.get('price', 0))
+                    committed = trade.get('committed', True)
+                    
+                    if quantity <= 0 or price <= 0 or not committed:
+                        continue
+                        
+                    trades_to_use.append(trade)
+            
+            if trades_to_use:
+                max_win = max(trade.get("pnl", 0.0) for trade in trades_to_use)
+                max_loss = min(trade.get("pnl", 0.0) for trade in trades_to_use)
+                total_fees = sum(trade.get("fees", 0.0) for trade in trades_to_use)
+                total_trade_volume = sum(
+                    trade.get("quantity", 0.0) * trade.get("entry_price", 0.0) for trade in trades_to_use
+                )
+                best_trade = max(trades_to_use, key=lambda x: x.get("pnl", 0.0))
+                worst_trade = min(trades_to_use, key=lambda x: x.get("pnl", 0.0))
 
         # Calculate daily metrics with guards
         avg_daily_pnl = 0.0
         if self.daily_pnl:
             avg_daily_pnl = sum(self.daily_pnl.values()) / len(self.daily_pnl)
 
-        # Generate report
+        # Get metrics from trade ledger as single source of truth
+        ledger_metrics = self.get_metrics_from_ledger(self.session_id)
+        
+        # Generate report using ledger metrics
         report = {
-            # Core metrics
-            "total_trades": self.total_trades,
-            "winning_trades": self.winning_trades,
+            # Core metrics from ledger (committed trades only)
+            "total_trades": ledger_metrics.get("total_trades", 0),
+            "winning_trades": self.winning_trades,  # Keep local P&L tracking
             "losing_trades": self.losing_trades,
             "win_rate": win_rate,
             "profit_factor": profit_factor,
@@ -635,7 +738,8 @@ class ProfitAnalytics(LoggerMixin):
             "current_equity": self.current_equity,
             # Capital metrics
             "initial_capital": self.initial_capital,
-            "total_fees": total_fees,
+            "total_fees": ledger_metrics.get("total_fees", 0.0),
+            "total_trade_volume": ledger_metrics.get("total_volume", 0.0),
             # Strategy breakdown
             "strategy_performance": strategy_performance,
             # Time-based metrics

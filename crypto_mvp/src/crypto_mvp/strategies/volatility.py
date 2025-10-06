@@ -134,8 +134,12 @@ class VolatilityStrategy(Strategy):
         current_vol = volatility_data["current_volatility"]
         atr = volatility_data["atr"]
 
-        # Use ATR for stop loss distance
-        stop_distance = atr * 2.0
+        # Use ATR for stop loss distance with fallback
+        if atr is not None and atr > 0:
+            stop_distance = atr * 2.0
+        else:
+            # Fallback to percent-based distance
+            stop_distance = entry_price * 0.02  # 2% fallback
 
         if volatility_score > 0:  # Volatility expansion (potential breakout)
             stop_loss = entry_price - stop_distance

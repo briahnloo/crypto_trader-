@@ -4,8 +4,8 @@ Multi-strategy executor that coordinates between individual strategy executors a
 
 from typing import Any, Optional
 
-from ..core.logging_utils import LoggerMixin
-from ..risk.risk_manager import ProfitOptimizedRiskManager
+from crypto_mvp.core.logging_utils import LoggerMixin
+from crypto_mvp.risk.risk_manager import ProfitOptimizedRiskManager
 from .executors import (
     ArbitrageExecutor,
     BaseExecutor,

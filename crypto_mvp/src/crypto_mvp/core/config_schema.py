@@ -167,6 +167,9 @@ class TradingConfig(BaseModel):
         default=TimeFrame.HOUR_1, description="Trading timeframe"
     )
     symbols: list[str] = Field(default_factory=list, description="Trading symbols")
+    symbol_whitelist: list[str] = Field(
+        default_factory=list, description="Symbol whitelist - only these symbols can be traded"
+    )
     strategies: Optional[list[StrategyType]] = Field(
         default=None, description="Enabled strategies"
     )
@@ -193,7 +196,7 @@ class TradingConfig(BaseModel):
         default=300, ge=60, le=3600, description="Trading cycle interval in seconds"
     )
 
-    @field_validator("symbols")
+    @field_validator("symbols", "symbol_whitelist")
     @classmethod
     def validate_symbols(cls, v):
         """Validate symbol format."""
@@ -395,6 +398,101 @@ class DatabaseConfig(BaseModel):
     )
 
 
+class ProfitRealizationConfig(BaseModel):
+    """Profit realization configuration schema."""
+
+    enabled: bool | str = Field(default=True, description="Enable profit realization logic (overridable via REALIZATION_ENABLED env var)")
+    
+    # Take profit ladder configuration
+    take_profit_ladder: list[dict[str, float]] = Field(
+        default_factory=lambda: [
+            {"r": 0.5, "pct": 0.25},
+            {"r": 1.0, "pct": 0.35}, 
+            {"r": 2.0, "pct": 0.30}
+        ],
+        description="Take profit ladder: [{'r': risk_multiple, 'pct': position_pct_to_sell}]"
+    )
+    
+    # Trailing stop configuration
+    trail: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "type": "chandelier",
+            "n": 22,
+            "atr_mult_normal": 2.0,
+            "atr_mult_high_vol": 2.5
+        },
+        description="Trailing stop configuration"
+    )
+    
+    # Time stop configuration
+    time_stop_hours: int = Field(
+        default=24, ge=1, le=168, description="Time stop in hours (1 hour to 1 week)"
+    )
+
+    @field_validator("take_profit_ladder")
+    @classmethod
+    def validate_take_profit_ladder(cls, v):
+        """Validate take profit ladder configuration."""
+        if not v:
+            return v
+        
+        total_pct = sum(step.get("pct", 0) for step in v)
+        if total_pct > 1.0:
+            raise ValueError(f"Take profit ladder percentages sum to {total_pct:.1%}, must be ≤ 100%")
+        
+        for i, step in enumerate(v):
+            if "r" not in step or "pct" not in step:
+                raise ValueError(f"Take profit ladder step {i} must have 'r' and 'pct' keys")
+            if step["r"] <= 0:
+                raise ValueError(f"Take profit ladder step {i} risk multiple must be > 0")
+            if not 0 < step["pct"] <= 1.0:
+                raise ValueError(f"Take profit ladder step {i} percentage must be 0-100%")
+        
+        return v
+
+
+class SessionRiskConfig(BaseModel):
+    """Session risk management configuration schema."""
+
+    daily_profit_trail_pct: float = Field(
+        default=0.5, ge=0.1, le=5.0, description="Daily profit trail percentage"
+    )
+    daily_dd_halt_pct: float = Field(
+        default=0.01, ge=0.001, le=0.1, description="Daily drawdown halt percentage"
+    )
+
+    @field_validator("daily_profit_trail_pct")
+    @classmethod
+    def validate_daily_profit_trail(cls, v):
+        """Validate daily profit trail percentage."""
+        if v > 2.0:  # 2%
+            raise ValueError(
+                f"Daily profit trail ({v:.1%}) is high. Consider reducing to ≤2% for safety."
+            )
+        return v
+
+    @field_validator("daily_dd_halt_pct")
+    @classmethod
+    def validate_daily_dd_halt(cls, v):
+        """Validate daily drawdown halt percentage."""
+        if v > 0.05:  # 5%
+            raise ValueError(
+                f"Daily drawdown halt ({v:.1%}) is high. Consider reducing to ≤5% for safety."
+            )
+        return v
+
+
+class ExecutionConfig(BaseModel):
+    """Execution configuration schema."""
+
+    maker_timeout_sec: int = Field(
+        default=4, ge=1, le=60, description="Maker order timeout in seconds"
+    )
+    max_depth_pct: float = Field(
+        default=0.2, ge=0.01, le=1.0, description="Maximum order book depth percentage"
+    )
+
+
 class DevelopmentConfig(BaseModel):
     """Development configuration schema."""
 
@@ -439,6 +537,16 @@ class CryptoMVPConfig(BaseModel):
     )
     development: DevelopmentConfig = Field(
         default_factory=DevelopmentConfig, description="Development configuration"
+    )
+    # New profit realization configuration
+    realization: ProfitRealizationConfig = Field(
+        default_factory=ProfitRealizationConfig, description="Profit realization configuration"
+    )
+    session_risk: SessionRiskConfig = Field(
+        default_factory=SessionRiskConfig, description="Session risk management configuration"
+    )
+    execution: ExecutionConfig = Field(
+        default_factory=ExecutionConfig, description="Execution configuration"
     )
 
     @model_validator(mode="after")

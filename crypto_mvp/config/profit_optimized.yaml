@@ -7,9 +7,11 @@ trading:
   symbols:
     - "BTC/USDT"
     - "ETH/USDT"
-    - "BNB/USDT"
     - "ADA/USDT"
     - "SOL/USDT"
+  symbol_whitelist:
+    - "BTC/USDT"
+    - "ETH/USDT"
   strategies:
     - "momentum"
     - "breakout"
@@ -19,8 +21,8 @@ trading:
   max_open_trades: 5
   min_trade_interval: 300  # 5 minutes in seconds
   trade_timeout: 3600  # 1 hour in seconds
-  min_confidence: 0.4  # Reduced from 0.6 to 0.4 for more opportunities
-  min_signal_score: 0.15  # Reduced from 0.3 to 0.15 for more trades
+  min_confidence: 0.3  # Reduced from 0.4 to 0.3 for more opportunities
+  min_signal_score: 0.10  # Reduced from 0.15 to 0.10 for more trades
   cycle_interval: 60  # Time between trading cycles in seconds (60 seconds)
   initial_capital: 10000  # Starting capital for trading
   live_mode: false  # Live trading mode (false for paper trading)
@@ -38,7 +40,11 @@ risk:
     max_notional_pct: 1.0  # 1.0% max notional of equity
     risk_per_trade: 0.01  # 1% risk per trade (legacy)
     max_position_size: 0.1  # 10% max position size (legacy)
-  daily_loss_limit: 0.03  # 3% daily loss limit
+  daily_loss_limit: 0.05  # 5% daily loss limit (enhanced for safety)
+  max_drawdown_limit: 0.10  # 10% maximum drawdown limit
+  position_size_limit: 0.02  # 2% maximum position size limit
+  stop_loss_percentage: 0.03  # 3% automatic stop loss percentage
+  max_risk_per_trade: 0.02  # 2% maximum risk per trade
   max_correlation: 0.7  # Maximum correlation between positions
   volatility_adjustment: true
   dynamic_sizing: true
@@ -71,10 +77,149 @@ risk:
   # Risk-per-trade sizing
   risk_per_trade_pct: 0.10       # Risk 0.10% of equity per trade
   allow_upsize: false            # Never increase position size beyond current default
+  
+  # Exit logic configuration
+  exits:
+    enable_chandelier: true
+    chandelier_n_atr: 2.5
+    tp_ladders:
+      - { profit_pct: 0.8, pct: 0.50 }  # +0.8% profit, sell 50% of position
+      - { profit_pct: 1.5, pct: 0.50 }  # +1.5% profit, sell 50% of remaining
+    time_stop_bars: 60
+    min_qty: 1e-9
+  
+  # Entry gate configuration
+  entry_gate:
+    enable_top_k: true          # NEW: Enable top-k selection instead of threshold
+    top_k_entries: 2            # NEW: Try top 2 candidates (or 3)
+    hard_floor_min: 0.60        # Increased from 0.40 for higher quality trades
+    gate_margin: 0.05           # Increased from 0.01 for more flexibility
+    effective_threshold: 0.65   # Keep as-is, used if enable_top_k=false
+    enable_vol_gate_easing: true  # Enable volatility-aware easing
+    vol_ease_k: 0.02           # Volatility easing coefficient
+    vol_ease_max: 0.5          # Maximum volatility easing
+  
+  # Exploration budget for forced pilots in quiet markets
+  exploration:
+    enabled: true
+    budget_pct_per_day: 0.03     # 3% of equity/day reserved for forced pilots
+    min_score: 0.30              # Allow marginal setups in quiet regimes
+    max_forced_per_day: 2        # Cap on forced trades per day
+    size_mult_vs_normal: 0.5     # Half normal risk size
+    tighter_stop_mult: 0.7       # 30% tighter stops than normal
+  
+  # Risk-on override for volatile market conditions
+  risk_on:
+    enabled: true
+    trigger:
+      atr_over_sma: 1.00         # ATR/ATR_SMA >= 1.00 triggers risk-on mode (lowered from 1.15)
+      atr_period: 14             # ATR period
+      atr_sma_period: 100        # ATR_SMA period
+    window_cycles: 3             # Override lasts for next 3 cycles
+    min_gate_floor: 0.35         # Lower than normal hard floor
+    risk_per_trade_pct: 0.02     # Bump from default (1%->2%)
+    allow_pyramids: true
+    max_adds: 2
+    add_triggers_r: [0.75, 1.5]  # Adds at +0.75R and +1.5R
+  
+  # Risk-based sizing configuration
+  sizing:
+    risk_per_trade_pct: 0.01   # 1% risk per trade (base, outside risk-on)
+    max_position_value_pct: 0.05  # 5% max position value
+    pilot_multiplier: 0.4      # Pilot trades use 40% of normal size
+    min_clip_$: 10.0           # Minimum slice size in dollars
+    per_symbol_cap_$: 500.0    # Per-symbol cap in dollars
+    session_cap_$: 0.3         # Session cap as fraction of equity (30%)
+  
+  # Daily loss limit guardrail
+  daily_max_loss_pct: 0.02       # Halt entries if daily loss > 2%
+  
+  # Preflight validation configuration
+  min_stop_frac: 0.001           # Minimum stop distance as fraction of entry price (0.1%)
+  fallback_stop_frac: 0.005      # Fallback stop distance as fraction of entry price (0.5%)
+  short_enabled: false           # Global default - disable shorts on spot by default
+
+# Live Trading Safeguards Configuration
+live_trading_safeguards:
+  # Paper trading mode - CRITICAL for testing
+  paper_trading_mode: true  # Set to false only for live trading with real money
+  paper_trading_balance: 10000  # Starting balance for paper trading
+  
+  # Emergency stop functionality
+  emergency_stop:
+    enabled: true
+    manual_override: true  # Allow manual emergency stop
+    auto_stop_triggers:
+      - "max_drawdown_exceeded"
+      - "daily_loss_limit_exceeded"
+      - "position_size_limit_exceeded"
+      - "api_connection_lost"
+      - "unusual_activity_detected"
+  
+  # Position size limits for live trading
+  position_limits:
+    max_position_size_pct: 0.01  # 1% maximum position size for live trading
+    max_total_exposure_pct: 0.05  # 5% maximum total exposure
+    max_positions_count: 3  # Maximum number of open positions
+    min_position_size_usd: 10  # Minimum position size in USD
+    max_position_size_usd: 500  # Maximum position size in USD
+  
+  # Trading session limits
+  session_limits:
+    max_trading_hours: 8  # Maximum trading hours per day
+    max_trades_per_day: 10  # Maximum trades per day
+    max_trades_per_hour: 3  # Maximum trades per hour
+    trading_start_time: "09:00"  # Trading start time (24h format)
+    trading_end_time: "17:00"  # Trading end time (24h format)
+    weekend_trading: false  # Allow trading on weekends
+  
+  # Real-time monitoring and alerts
+  monitoring:
+    enabled: true
+    alert_thresholds:
+      equity_change_pct: 2.0  # Alert if equity changes by more than 2% in one cycle
+      position_pnl_pct: 5.0  # Alert if any position P&L exceeds 5%
+      unusual_volume_multiplier: 3.0  # Alert if volume is 3x normal
+      api_error_count: 5  # Alert if more than 5 API errors in 10 minutes
+    
+    # Alert destinations
+    alerts:
+      console: true  # Console alerts
+      log_file: true  # Log file alerts
+      email: false  # Email alerts (requires SMTP config)
+      telegram: false  # Telegram alerts (requires bot token)
+      discord: false  # Discord alerts (requires webhook)
+  
+  # Safety checks before live trading
+  pre_live_checks:
+    min_paper_trading_days: 7  # Minimum days of paper trading before live
+    min_paper_trading_trades: 50  # Minimum paper trades before live
+    max_paper_trading_loss_pct: 5.0  # Maximum paper trading loss allowed
+    required_win_rate: 0.4  # Minimum win rate required (40%)
+    required_profit_factor: 1.2  # Minimum profit factor required
+  
+  # Live trading confirmation
+  live_trading_confirmation:
+    require_confirmation: true  # Require explicit confirmation for live trading
+    confirmation_timeout: 30  # Timeout in seconds for confirmation
+    double_confirmation: true  # Require double confirmation for live trading
+    confirmation_phrase: "I_UNDERSTAND_THE_RISKS"  # Phrase required for confirmation
 
 # Universe Configuration
 universe:
-  whitelist: [BTC/USDT, ETH/USDT, SOL/USDT]  # Only trade these liquid pairs
+  whitelist: [BTC/USDT, ETH/USDT, ADA/USDT, SOL/USDT]  # Only trade these liquid pairs
+
+# Symbol-specific Configuration
+symbols:
+  BTC/USDT:
+    allow_short: false
+  ETH/USDT:
+    allow_short: false
+
+  ADA/USDT:
+    allow_short: false
+  SOL/USDT:
+    allow_short: false
 
 # Market Data Configuration
 market_data:
@@ -92,22 +237,21 @@ logging:
 exchanges:
   binance:
     enabled: true
-    api_key: "your_binance_api_key_here"
-    secret: "your_binance_secret_here"
+    api_key: "${BINANCE_API_KEY:-your_binance_api_key_here}"
+    secret: "${BINANCE_SECRET:-your_binance_secret_here}"
     sandbox: true
     rate_limit: 10
     timeout: 30
     symbols:
       - "BTC/USDT"
       - "ETH/USDT"
-      - "BNB/USDT"
       - "ADA/USDT"
       - "SOL/USDT"
 
   coinbase:
     enabled: true
-    api_key: "your_coinbase_api_key_here"
-    secret: "your_coinbase_secret_here"
+    api_key: "${COINBASE_API_KEY:-your_coinbase_api_key_here}"
+    secret: "${COINBASE_SECRET:-your_coinbase_secret_here}"
     sandbox: true
     rate_limit: 5
     timeout: 30
@@ -298,7 +442,7 @@ portfolio:
   asset_sectors:
     "BTC/USDT": "layer1"
     "ETH/USDT": "layer1"
-    "BNB/USDT": "layer1"
+
     "ADA/USDT": "layer1"
     "SOL/USDT": "layer1"
     "DOT/USDT": "layer1"
@@ -338,39 +482,6 @@ portfolio:
       - "win_rate"
       - "profit_factor"
 
-# Execution Configuration
-execution:
-  order_type: "market"  # market, limit, stop
-  slippage_tolerance: 0.001  # 0.1%
-  max_retries: 3
-  retry_delay: 5  # seconds
-  timeout: 30  # seconds
-  
-  # Edge after costs guard
-  require_edge_after_costs: true  # Enable edge after costs guard
-  min_edge_after_costs_bps: 10  # Minimum 10 bps edge after costs
-  
-  # Fee configuration (in basis points)
-  maker_fee_bps: 10  # 0.1% maker fee
-  taker_fee_bps: 20  # 0.2% taker fee (used for worst-case guard)
-  
-  # Post-only order routing
-  post_only: true  # Use post-only limit orders at best bid/ask
-  post_only_max_wait_seconds: 5  # Maximum wait time for maker fills
-  allow_taker_fallback: false  # Do not convert to market orders if not filled
-
-  # Order management
-  order_management:
-    enabled: true
-    auto_cancel: true
-    cancel_timeout: 300  # 5 minutes
-    partial_fills: true
-
-  # Slippage control
-  slippage_control:
-    enabled: true
-    max_slippage: 0.002  # 0.2%
-    dynamic_sizing: true
 
 # State Persistence Configuration
 state:
@@ -472,6 +583,86 @@ monitoring:
     connection_lost: true
     strategy_error: true
     execution_failed: true
+
+# Profit Realization Configuration
+realization:
+  enabled: "${REALIZATION_ENABLED:-true}"  # Feature flag - enabled by default for production (overridable via REALIZATION_ENABLED env var)
+  
+  # Take profit ladder configuration
+  take_profit_ladder:
+    - r: 0.5    # At 0.5R profit
+      pct: 0.25 # Sell 25% of position
+    - r: 1.0    # At 1.0R profit  
+      pct: 0.35 # Sell 35% of remaining position
+    - r: 2.0    # At 2.0R profit
+      pct: 0.30 # Sell 30% of remaining position
+  
+  # Trailing stop configuration
+  trail:
+    type: "chandelier"      # Trailing stop type
+    n: 22                   # Lookback period for chandelier
+    atr_mult_normal: 2.0    # ATR multiplier for normal volatility
+    atr_mult_high_vol: 2.5  # ATR multiplier for high volatility
+  
+  # Time stop configuration
+  time_stop_hours: 24  # Exit position after 24 hours if no TP/SL hit
+
+# Session Risk Management Configuration
+session_risk:
+  daily_profit_trail_pct: 0.5  # 0.5% daily profit trail
+  daily_dd_halt_pct: 0.01      # 1% daily drawdown halt
+
+# Equity Reconciliation Configuration
+equity:
+  reconcile_tolerance: 0.0001  # 0.01% tolerance for equity reconciliation
+  max_reconcile_iterations: 5  # Maximum iterations before hard stop
+
+# Enhanced Execution Configuration
+execution:
+  # Existing execution config...
+  order_type: "market"  # market, limit, stop
+  slippage_tolerance: 0.001  # 0.1%
+  max_retries: 3
+  retry_delay: 5  # seconds
+  timeout: 30  # seconds
+  
+  # New execution parameters
+  maker_timeout_sec: 4      # Maker order timeout in seconds
+  max_depth_pct: 0.2        # Maximum order book depth percentage
+  
+  # Strengthened sizing and slice configuration
+  risk_per_trade_pct: 0.01       # Base risk (outside risk-on mode)
+  per_symbol_cap_pct: 0.15       # Notional cap per symbol (15% of equity)
+  session_cap_pct: 0.60          # Total deployment cap (60% of equity)
+  min_slice_notional: 25         # Minimum slice size (bumped from $10)
+  default_slice_notional: 50     # Typical slice size
+  max_slices_per_order: 20       # Maximum slices per order
+  
+  # Edge after costs guard
+  require_edge_after_costs: true  # Enable edge after costs guard
+  min_edge_after_costs_bps: 10  # Minimum 10 bps edge after costs
+  
+  # Fee configuration (in basis points)
+  maker_fee_bps: 10  # 0.1% maker fee
+  taker_fee_bps: 20  # 0.2% taker fee (used for worst-case guard)
+  
+  # Post-only order routing
+  post_only: true  # Use post-only limit orders at best bid/ask
+  post_only_max_wait_seconds: 5  # Maximum wait time for maker fills
+  allow_taker_fallback: false  # Do not convert to market orders if not filled
+
+  # Order management
+  order_management:
+    enabled: true
+    auto_cancel: true
+    cancel_timeout: 300  # 5 minutes
+    partial_fills: true
+
+  # Slippage control
+  slippage_control:
+    enabled: true
+    max_slippage: 0.002  # 0.2%
+    dynamic_sizing: true
 
 # Development and Testing
 development:

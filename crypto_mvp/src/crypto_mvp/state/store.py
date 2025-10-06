@@ -69,6 +69,7 @@ class StateStore(LoggerMixin):
                 quantity REAL NOT NULL,
                 entry_price REAL NOT NULL,
                 current_price REAL NOT NULL,
+                value REAL NOT NULL DEFAULT 0.0,
                 unrealized_pnl REAL NOT NULL,
                 strategy TEXT NOT NULL,
                 session_id TEXT NOT NULL,
@@ -77,6 +78,26 @@ class StateStore(LoggerMixin):
                 UNIQUE(symbol, strategy, session_id)
             )
         """)
+        
+        # Add value column to positions table if it doesn't exist (migration)
+        try:
+            cursor.execute("ALTER TABLE positions ADD COLUMN value REAL NOT NULL DEFAULT 0.0")
+            self.logger.info("Added value column to positions table")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e):
+                self.logger.debug("Value column already exists in positions table")
+            else:
+                self.logger.warning(f"Could not add value column to positions table: {e}")
+        
+        # Add previous_equity column to cash_equity table if it doesn't exist (migration)
+        try:
+            cursor.execute("ALTER TABLE cash_equity ADD COLUMN previous_equity REAL NOT NULL DEFAULT 0.0")
+            self.logger.info("Added previous_equity column to cash_equity table")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e):
+                self.logger.debug("Previous_equity column already exists in cash_equity table")
+            else:
+                self.logger.warning(f"Could not add previous_equity column to cash_equity table: {e}")
         
         # Trades table
         cursor.execute("""
@@ -101,6 +122,7 @@ class StateStore(LoggerMixin):
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 cash_balance REAL NOT NULL,
                 total_equity REAL NOT NULL,
+                previous_equity REAL NOT NULL DEFAULT 0.0,
                 total_fees REAL NOT NULL,
                 total_realized_pnl REAL NOT NULL,
                 total_unrealized_pnl REAL NOT NULL,
@@ -151,6 +173,35 @@ class StateStore(LoggerMixin):
             )
         """)
         
+        # Create session metadata table for risk-on and other session state
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_metadata (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(session_id, key)
+            )
+        """)
+        
+        # Create lotbook table for FIFO lot tracking
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS lotbook (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                lot_id TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                cost_price REAL NOT NULL,
+                fee REAL NOT NULL DEFAULT 0.0,
+                timestamp TIMESTAMP NOT NULL,
+                session_id TEXT NOT NULL,
+                trade_id TEXT UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(symbol, lot_id, session_id)
+            )
+        """)
+        
         # Create indexes for better performance
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_positions_symbol ON positions(symbol)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)")
@@ -160,6 +211,12 @@ class StateStore(LoggerMixin):
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_signal_windows_timestamp ON signal_windows(timestamp)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_composite_windows_symbol_timeframe ON composite_signal_windows(symbol, timeframe)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_composite_windows_timestamp ON composite_signal_windows(timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_metadata_session_id ON session_metadata(session_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_metadata_key ON session_metadata(key)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_lotbook_symbol ON lotbook(symbol)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_lotbook_session_id ON lotbook(session_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_lotbook_timestamp ON lotbook(timestamp)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_lotbook_trade_id ON lotbook(trade_id)")
         
         self.connection.commit()
         self.logger.debug("Database tables created successfully")
@@ -176,7 +233,7 @@ class StateStore(LoggerMixin):
         """Save or update a position.
         
         Args:
-            symbol: Trading symbol
+            symbol: Trading symbol (will be canonicalized)
             quantity: Position quantity (positive for long, negative for short)
             entry_price: Entry price of the position
             current_price: Current market price
@@ -186,55 +243,69 @@ class StateStore(LoggerMixin):
         if not self.initialized:
             self.initialize()
         
+        # Canonicalize symbol for consistent storage
+        from ..core.utils import to_canonical
+        canonical_symbol = to_canonical(symbol)
+        
         unrealized_pnl = (current_price - entry_price) * quantity
+        position_value = quantity * current_price
         
         cursor = self.connection.cursor()
         cursor.execute("""
             INSERT OR REPLACE INTO positions 
-            (symbol, quantity, entry_price, current_price, unrealized_pnl, strategy, session_id, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """, (symbol, quantity, entry_price, current_price, unrealized_pnl, strategy, session_id))
+            (symbol, quantity, entry_price, current_price, value, unrealized_pnl, strategy, session_id, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """, (canonical_symbol, quantity, entry_price, current_price, position_value, unrealized_pnl, strategy, session_id))
         
         self.connection.commit()
-        self.logger.debug(f"Saved position: {symbol} {quantity} @ {entry_price}")
+        self.logger.debug(f"Saved position: {canonical_symbol} {quantity} @ {entry_price}")
 
     def update_position_price(self, symbol: str, current_price: float) -> None:
         """Update the current price of a position.
         
         Args:
-            symbol: Trading symbol
+            symbol: Trading symbol (will be canonicalized)
             current_price: New current market price
         """
         if not self.initialized:
             self.initialize()
         
+        # Canonicalize symbol for consistent lookup
+        from ..core.utils import to_canonical
+        canonical_symbol = to_canonical(symbol)
+        
         cursor = self.connection.cursor()
         cursor.execute("""
             UPDATE positions 
             SET current_price = ?, 
-                unrealized_pnl = (current_price - entry_price) * quantity,
+                value = quantity * ?,
+                unrealized_pnl = (? - entry_price) * quantity,
                 updated_at = CURRENT_TIMESTAMP
             WHERE symbol = ?
-        """, (current_price, symbol))
+        """, (current_price, current_price, current_price, canonical_symbol))
         
         self.connection.commit()
-        self.logger.debug(f"Updated position price: {symbol} @ {current_price}")
+        self.logger.debug(f"Updated position price: {canonical_symbol} @ {current_price}")
 
     def remove_position(self, symbol: str, strategy: str) -> None:
         """Remove a position from the store.
         
         Args:
-            symbol: Trading symbol
+            symbol: Trading symbol (will be canonicalized)
             strategy: Strategy that created the position
         """
         if not self.initialized:
             self.initialize()
         
+        # Canonicalize symbol for consistent lookup
+        from ..core.utils import to_canonical
+        canonical_symbol = to_canonical(symbol)
+        
         cursor = self.connection.cursor()
-        cursor.execute("DELETE FROM positions WHERE symbol = ? AND strategy = ?", (symbol, strategy))
+        cursor.execute("DELETE FROM positions WHERE symbol = ? AND strategy = ?", (canonical_symbol, strategy))
         
         self.connection.commit()
-        self.logger.debug(f"Removed position: {symbol} (strategy: {strategy})")
+        self.logger.debug(f"Removed position: {canonical_symbol} (strategy: {strategy})")
 
     def get_positions(self, session_id: str) -> List[Dict[str, Any]]:
         """Get all current positions for a session.
@@ -267,7 +338,7 @@ class StateStore(LoggerMixin):
         """Get a specific position.
         
         Args:
-            symbol: Trading symbol
+            symbol: Trading symbol (will be canonicalized)
             strategy: Strategy that created the position
             
         Returns:
@@ -276,10 +347,14 @@ class StateStore(LoggerMixin):
         if not self.initialized:
             self.initialize()
         
+        # Canonicalize symbol for consistent lookup
+        from ..core.utils import to_canonical
+        canonical_symbol = to_canonical(symbol)
+        
         cursor = self.connection.cursor()
         cursor.execute(
             "SELECT * FROM positions WHERE symbol = ? AND strategy = ?",
-            (symbol, strategy)
+            (canonical_symbol, strategy)
         )
         
         row = cursor.fetchone()
@@ -364,7 +439,8 @@ class StateStore(LoggerMixin):
         total_fees: float,
         total_realized_pnl: float,
         total_unrealized_pnl: float,
-        session_id: str
+        session_id: str,
+        previous_equity: float = 0.0
     ) -> None:
         """Save cash and equity information.
         
@@ -375,19 +451,73 @@ class StateStore(LoggerMixin):
             total_realized_pnl: Total realized profit/loss
             total_unrealized_pnl: Total unrealized profit/loss
             session_id: Session identifier
+            previous_equity: Previous cycle's equity (for P&L calculation)
         """
         if not self.initialized:
             self.initialize()
         
+        # Validate data consistency before saving
+        self._validate_cash_equity_data(cash_balance, total_equity, total_fees, total_realized_pnl, total_unrealized_pnl)
+        
         cursor = self.connection.cursor()
         cursor.execute("""
             INSERT INTO cash_equity 
-            (cash_balance, total_equity, total_fees, total_realized_pnl, total_unrealized_pnl, session_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (cash_balance, total_equity, total_fees, total_realized_pnl, total_unrealized_pnl, session_id))
+            (cash_balance, total_equity, previous_equity, total_fees, total_realized_pnl, total_unrealized_pnl, session_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (cash_balance, total_equity, previous_equity, total_fees, total_realized_pnl, total_unrealized_pnl, session_id))
         
         self.connection.commit()
-        self.logger.debug(f"Saved cash/equity: cash=${cash_balance:,.2f}, equity=${total_equity:,.2f}")
+        
+        # Log successful save with validation
+        self.logger.debug(f"CASH_EQUITY_SAVED: cash=${cash_balance:.2f}, equity=${total_equity:.2f}, fees=${total_fees:.2f}")
+
+    def _validate_cash_equity_data(
+        self,
+        cash_balance: float,
+        total_equity: float,
+        total_fees: float,
+        total_realized_pnl: float,
+        total_unrealized_pnl: float,
+    ) -> None:
+        """Validate cash and equity data for consistency."""
+        try:
+            # Check for negative values where they shouldn't be
+            if cash_balance < 0:
+                self.logger.warning(f"CASH_EQUITY_VALIDATION: Negative cash balance: ${cash_balance:.2f}")
+            
+            if total_equity < 0:
+                self.logger.warning(f"CASH_EQUITY_VALIDATION: Negative total equity: ${total_equity:.2f}")
+            
+            if total_fees < 0:
+                self.logger.warning(f"CASH_EQUITY_VALIDATION: Negative total fees: ${total_fees:.2f}")
+            
+            # Check for reasonable values
+            if total_equity > 1000000:  # $1M seems like a reasonable upper bound for testing
+                self.logger.warning(f"CASH_EQUITY_VALIDATION: Very high total equity: ${total_equity:.2f}")
+            
+            if total_fees > total_equity * 0.1:  # Fees shouldn't be more than 10% of equity
+                self.logger.warning(f"CASH_EQUITY_VALIDATION: High fees relative to equity: ${total_fees:.2f} vs ${total_equity:.2f}")
+            
+            # Check for NaN or infinite values
+            import math
+            if math.isnan(cash_balance) or math.isinf(cash_balance):
+                raise ValueError(f"Invalid cash balance: {cash_balance}")
+            
+            if math.isnan(total_equity) or math.isinf(total_equity):
+                raise ValueError(f"Invalid total equity: {total_equity}")
+            
+            if math.isnan(total_fees) or math.isinf(total_fees):
+                raise ValueError(f"Invalid total fees: {total_fees}")
+            
+            if math.isnan(total_realized_pnl) or math.isinf(total_realized_pnl):
+                raise ValueError(f"Invalid total realized P&L: {total_realized_pnl}")
+            
+            if math.isnan(total_unrealized_pnl) or math.isinf(total_unrealized_pnl):
+                raise ValueError(f"Invalid total unrealized P&L: {total_unrealized_pnl}")
+                
+        except Exception as e:
+            self.logger.error(f"CASH_EQUITY_VALIDATION_FAILED: {e}")
+            raise
 
     def get_latest_cash_equity(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get the latest cash and equity information for a session.
@@ -411,7 +541,11 @@ class StateStore(LoggerMixin):
         cursor.execute("SELECT * FROM cash_equity WHERE session_id = ? ORDER BY id DESC LIMIT 1", (session_id,))
         
         row = cursor.fetchone()
-        return dict(row) if row else None
+        if row:
+            # Get column names from cursor description
+            column_names = [description[0] for description in cursor.description]
+            return dict(zip(column_names, row))
+        return None
 
     def save_portfolio_snapshot(
         self,
@@ -480,10 +614,10 @@ class StateStore(LoggerMixin):
             self.initialize()
         
         # Get latest cash/equity
-        cash_equity = self.get_latest_cash_equity()
+        cash_equity = self.get_latest_cash_equity(session_id)
         
         # Get all positions
-        positions = self.get_positions()
+        positions = self.get_positions(session_id)
         
         # Get recent trades (last 10)
         recent_trades = self.get_trades(limit=10)
@@ -512,6 +646,20 @@ class StateStore(LoggerMixin):
         self.connection.commit()
         self.logger.info("All positions cleared from StateStore")
 
+    def clear_session_data(self, session_id: str) -> None:
+        """Clear data for a specific session only."""
+        if not self.initialized:
+            self.initialize()
+        
+        cursor = self.connection.cursor()
+        cursor.execute("DELETE FROM positions WHERE session_id = ?", (session_id,))
+        cursor.execute("DELETE FROM trades WHERE session_id = ?", (session_id,))
+        cursor.execute("DELETE FROM cash_equity WHERE session_id = ?", (session_id,))
+        cursor.execute("DELETE FROM portfolio_snapshots WHERE session_id = ?", (session_id,))
+        
+        self.connection.commit()
+        self.logger.info(f"Session data cleared for session {session_id}")
+    
     def clear_all_data(self) -> None:
         """Clear all data from the store (use with caution)."""
         if not self.initialized:
@@ -580,8 +728,8 @@ class StateStore(LoggerMixin):
             "budget": start_cash
         }
         
-        # Clear all existing data for fresh start
-        self.clear_all_data()
+        # Clear existing data for this session only
+        self.clear_session_data(session_id)
         
         # Initialize with starting cash
         self.save_cash_equity(
@@ -590,7 +738,8 @@ class StateStore(LoggerMixin):
             total_fees=0.0,
             total_realized_pnl=0.0,
             total_unrealized_pnl=0.0,
-            session_id=session_id
+            session_id=session_id,
+            previous_equity=start_cash
         )
         
         # Save initial portfolio snapshot
@@ -605,6 +754,38 @@ class StateStore(LoggerMixin):
         
         self.logger.info(f"Created new session {session_id} with ${start_cash:,.2f} starting cash")
         return session_meta
+
+    def continue_session(self, session_id: str, start_cash: float, mode: str = "paper") -> Dict[str, Any]:
+        """Continue an existing session without clearing data.
+        
+        This method is used when we want to continue trading in an existing session
+        without losing positions, cash, or other data. It only initializes if the session
+        doesn't exist.
+        
+        Args:
+            session_id: Unique session identifier
+            start_cash: Starting cash amount (used only if session doesn't exist)
+            mode: Trading mode ("paper" or "live")
+            
+        Returns:
+            Session metadata dictionary
+        """
+        if not self.initialized:
+            self.initialize()
+        
+        # Check if session already exists
+        try:
+            existing_session = self.load_session(session_id)
+            if existing_session:
+                self.logger.info(f"Continuing existing session {session_id} without clearing data")
+                return existing_session
+        except ValueError:
+            # Session doesn't exist, create it
+            pass
+        
+        # Session doesn't exist, create new one
+        self.logger.info(f"Session {session_id} not found, creating new session")
+        return self.new_session(session_id, start_cash, mode)
 
     def load_session(self, session_id: str) -> Dict[str, Any]:
         """Load an existing session by ID.
@@ -638,8 +819,8 @@ class StateStore(LoggerMixin):
             raise ValueError(f"Session {session_id} not found - no data exists")
         
         # Get latest cash/equity data
-        latest_cash_equity = self.get_latest_cash_equity()
-        positions = self.get_positions()
+        latest_cash_equity = self.get_latest_cash_equity(session_id)
+        positions = self.get_positions(session_id)
         
         session_meta = {
             "session_id": session_id,
@@ -661,8 +842,8 @@ class StateStore(LoggerMixin):
             self.initialize()
         
         # Get current state
-        latest_cash_equity = self.get_latest_cash_equity()
-        positions = self.get_positions()
+        latest_cash_equity = self.get_latest_cash_equity(session_id)
+        positions = self.get_positions(session_id)
         recent_trades = self.get_trades(limit=5)
         
         # Calculate totals
@@ -700,6 +881,56 @@ class StateStore(LoggerMixin):
         
         latest_cash_equity = self.get_latest_cash_equity(session_id)
         return latest_cash_equity["cash_balance"] if latest_cash_equity else 0.0
+
+    def get_session_equity(self, session_id: str) -> float:
+        """Get current session total equity.
+        
+        Args:
+            session_id: Session identifier (mandatory)
+            
+        Returns:
+            Current total equity for the session
+            
+        Raises:
+            ValueError: If session_id is not provided
+        """
+        if not session_id:
+            raise ValueError("session_id is mandatory for get_session_equity")
+        
+        if not self.initialized:
+            self.initialize()
+        
+        latest_cash_equity = self.get_latest_cash_equity(session_id)
+        return latest_cash_equity["total_equity"] if latest_cash_equity else 0.0
+
+    def get_session_deployed_capital(self, session_id: str) -> float:
+        """Get current session deployed capital (total equity - cash balance).
+        
+        Args:
+            session_id: Session identifier (mandatory)
+            
+        Returns:
+            Current deployed capital for the session
+            
+        Raises:
+            ValueError: If session_id is not provided
+        """
+        if not session_id:
+            raise ValueError("session_id is mandatory for get_session_deployed_capital")
+        
+        if not self.initialized:
+            self.initialize()
+        
+        latest_cash_equity = self.get_latest_cash_equity(session_id)
+        if not latest_cash_equity:
+            return 0.0
+        
+        # Deployed capital = total equity - cash balance
+        total_equity = latest_cash_equity["total_equity"]
+        cash_balance = latest_cash_equity["cash_balance"]
+        deployed_capital = total_equity - cash_balance
+        
+        return max(0.0, deployed_capital)  # Ensure non-negative
 
     def debit_cash(self, session_id: str, amount: float, fees: float = 0.0) -> bool:
         """Debit cash from session (for BUY orders).
@@ -740,7 +971,8 @@ class StateStore(LoggerMixin):
             total_fees=(latest_cash_equity["total_fees"] if latest_cash_equity else 0.0) + fees,
             total_realized_pnl=latest_cash_equity.get("total_realized_pnl", 0.0) if latest_cash_equity else 0.0,
             total_unrealized_pnl=latest_cash_equity.get("total_unrealized_pnl", 0.0) if latest_cash_equity else 0.0,
-            session_id=session_id
+            session_id=session_id,
+            previous_equity=latest_cash_equity.get("previous_equity", new_cash) if latest_cash_equity else new_cash
         )
         
         self.logger.debug(f"Debited ${total_debit:.2f} from cash: ${current_cash:.2f} → ${new_cash:.2f}")
@@ -785,7 +1017,8 @@ class StateStore(LoggerMixin):
             total_fees=(latest_cash_equity["total_fees"] if latest_cash_equity else 0.0) + fees,
             total_realized_pnl=latest_cash_equity.get("total_realized_pnl", 0.0) if latest_cash_equity else 0.0,
             total_unrealized_pnl=latest_cash_equity.get("total_unrealized_pnl", 0.0) if latest_cash_equity else 0.0,
-            session_id=session_id
+            session_id=session_id,
+            previous_equity=latest_cash_equity.get("previous_equity", new_cash) if latest_cash_equity else new_cash
         )
         
         self.logger.debug(f"Credited ${net_credit:.2f} to cash: ${current_cash:.2f} → ${new_cash:.2f}")
@@ -970,3 +1203,305 @@ class StateStore(LoggerMixin):
             "max": max_val,
             "count": len(signals)
         }
+
+    def get_session_metadata(self, session_id: str, key: str, default: Any = None) -> Any:
+        """Get session metadata value.
+        
+        Args:
+            session_id: Session identifier
+            key: Metadata key
+            default: Default value if key not found
+            
+        Returns:
+            Metadata value or default
+        """
+        try:
+            if not self.initialized:
+                return default
+            
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT value FROM session_metadata WHERE session_id = ? AND key = ?",
+                (session_id, key)
+            )
+            result = cursor.fetchone()
+            
+            if result:
+                # Try to parse as JSON, fallback to string
+                try:
+                    return json.loads(result[0])
+                except (json.JSONDecodeError, ValueError):
+                    return result[0]
+            
+            return default
+            
+        except Exception as e:
+            self.logger.warning(f"Error getting session metadata {key}: {e}")
+            return default
+
+    def set_session_metadata(self, session_id: str, key: str, value: Any) -> bool:
+        """Set session metadata value.
+        
+        Args:
+            session_id: Session identifier
+            key: Metadata key
+            value: Metadata value (will be JSON serialized)
+            
+        Returns:
+            True if successful
+        """
+        try:
+            if not self.initialized:
+                return False
+            
+            # Serialize value as JSON
+            json_value = json.dumps(value)
+            
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """INSERT OR REPLACE INTO session_metadata (session_id, key, value, updated_at)
+                   VALUES (?, ?, ?, ?)""",
+                (session_id, key, json_value, datetime.now().isoformat())
+            )
+            self.connection.commit()
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error setting session metadata {key}: {e}")
+            return False
+
+    # LotBook persistence methods
+    
+    def save_lot(
+        self,
+        symbol: str,
+        lot_id: str,
+        quantity: float,
+        cost_price: float,
+        fee: float,
+        timestamp: datetime,
+        session_id: str,
+        trade_id: Optional[str] = None
+    ) -> None:
+        """Save a lot to the lotbook.
+        
+        Args:
+            symbol: Trading symbol
+            lot_id: Unique lot identifier
+            quantity: Lot quantity
+            cost_price: Cost price per unit
+            fee: Trading fees for this lot
+            timestamp: When the lot was created
+            session_id: Session identifier
+            trade_id: Optional exchange trade ID for idempotency
+        """
+        if not self.initialized:
+            self.initialize()
+        
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO lotbook 
+            (symbol, lot_id, quantity, cost_price, fee, timestamp, session_id, trade_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (symbol, lot_id, quantity, cost_price, fee, timestamp.isoformat(), session_id, trade_id))
+        
+        self.connection.commit()
+        self.logger.debug(f"Saved lot {lot_id}: {quantity:.6f} {symbol} @ ${cost_price:.4f}")
+
+    def get_lotbook(self, symbol: str, session_id: str) -> List[Dict[str, Any]]:
+        """Get all lots for a symbol in FIFO order.
+        
+        Args:
+            symbol: Trading symbol
+            session_id: Session identifier
+            
+        Returns:
+            List of lot dictionaries in FIFO order (oldest first)
+        """
+        if not self.initialized:
+            self.initialize()
+        
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            SELECT * FROM lotbook 
+            WHERE symbol = ? AND session_id = ? 
+            ORDER BY timestamp ASC, id ASC
+        """, (symbol, session_id))
+        
+        lots = []
+        for row in cursor.fetchall():
+            lot_dict = dict(row)
+            # Convert timestamp string back to datetime if needed
+            if isinstance(lot_dict.get('timestamp'), str):
+                try:
+                    lot_dict['timestamp'] = datetime.fromisoformat(lot_dict['timestamp'])
+                except ValueError:
+                    pass  # Keep as string if parsing fails
+            lots.append(lot_dict)
+        
+        return lots
+
+    def set_lotbook(self, symbol: str, lots: List[Dict[str, Any]], session_id: str) -> None:
+        """Set all lots for a symbol (replaces existing).
+        
+        Args:
+            symbol: Trading symbol
+            lots: List of lot dictionaries
+            session_id: Session identifier
+        """
+        if not self.initialized:
+            self.initialize()
+        
+        cursor = self.connection.cursor()
+        
+        # Remove existing lots for this symbol/session
+        cursor.execute("DELETE FROM lotbook WHERE symbol = ? AND session_id = ?", (symbol, session_id))
+        
+        # Insert new lots
+        for lot in lots:
+            cursor.execute("""
+                INSERT INTO lotbook 
+                (symbol, lot_id, quantity, cost_price, fee, timestamp, session_id, trade_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                symbol,
+                lot.get('lot_id', ''),
+                lot.get('quantity', 0.0),
+                lot.get('cost_price', 0.0),
+                lot.get('fee', 0.0),
+                lot.get('timestamp', datetime.now()).isoformat() if isinstance(lot.get('timestamp'), datetime) else str(lot.get('timestamp', datetime.now())),
+                session_id,
+                lot.get('trade_id')
+            ))
+        
+        self.connection.commit()
+        self.logger.debug(f"Set lotbook for {symbol}: {len(lots)} lots")
+
+    def snapshot_all_lotbooks(self, session_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        """Get all lotbooks for all symbols in the session.
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            Dictionary mapping symbol -> list of lots
+        """
+        if not self.initialized:
+            self.initialize()
+        
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            SELECT symbol FROM lotbook 
+            WHERE session_id = ? 
+            GROUP BY symbol
+        """, (session_id,))
+        
+        symbols = [row[0] for row in cursor.fetchall()]
+        
+        lotbooks = {}
+        for symbol in symbols:
+            lotbooks[symbol] = self.get_lotbook(symbol, session_id)
+        
+        self.logger.debug(f"Snapshot lotbooks: {len(symbols)} symbols with lots")
+        return lotbooks
+
+    def load_all_lotbooks(self, session_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        """Load all lotbooks for all symbols in the session.
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            Dictionary mapping symbol -> list of lots
+        """
+        return self.snapshot_all_lotbooks(session_id)
+
+    def clear_lotbook(self, symbol: str, session_id: str) -> int:
+        """Clear all lots for a symbol.
+        
+        Args:
+            symbol: Trading symbol
+            session_id: Session identifier
+            
+        Returns:
+            Number of lots cleared
+        """
+        if not self.initialized:
+            self.initialize()
+        
+        cursor = self.connection.cursor()
+        cursor.execute("DELETE FROM lotbook WHERE symbol = ? AND session_id = ?", (symbol, session_id))
+        
+        cleared_count = cursor.rowcount
+        self.connection.commit()
+        
+        self.logger.debug(f"Cleared {cleared_count} lots for {symbol}")
+        return cleared_count
+
+    def clear_all_lotbooks(self, session_id: str) -> int:
+        """Clear all lotbooks for a session.
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            Total number of lots cleared
+        """
+        if not self.initialized:
+            self.initialize()
+        
+        cursor = self.connection.cursor()
+        cursor.execute("DELETE FROM lotbook WHERE session_id = ?", (session_id,))
+        
+        cleared_count = cursor.rowcount
+        self.connection.commit()
+        
+        self.logger.debug(f"Cleared all {cleared_count} lots for session {session_id}")
+        return cleared_count
+
+    def get_lotbook_summary(self, session_id: str) -> Dict[str, Any]:
+        """Get summary of all lotbooks in the session.
+        
+        Args:
+            session_id: Session identifier
+            
+        Returns:
+            Dictionary with lotbook summary information
+        """
+        if not self.initialized:
+            self.initialize()
+        
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            SELECT 
+                symbol,
+                COUNT(*) as lot_count,
+                SUM(quantity) as total_quantity,
+                SUM(quantity * cost_price + fee) as total_cost,
+                AVG(cost_price) as avg_cost_price
+            FROM lotbook 
+            WHERE session_id = ? 
+            GROUP BY symbol
+        """, (session_id,))
+        
+        summary = {
+            "session_id": session_id,
+            "total_symbols": 0,
+            "total_lots": 0,
+            "symbols": {}
+        }
+        
+        for row in cursor.fetchall():
+            symbol, lot_count, total_quantity, total_cost, avg_cost_price = row
+            summary["symbols"][symbol] = {
+                "lot_count": lot_count,
+                "total_quantity": total_quantity or 0.0,
+                "total_cost": total_cost or 0.0,
+                "avg_cost_price": avg_cost_price or 0.0
+            }
+            summary["total_lots"] += lot_count
+        
+        summary["total_symbols"] = len(summary["symbols"])
+        
+        return summary

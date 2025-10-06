@@ -59,6 +59,7 @@ class RegimeDetector(LoggerMixin):
         # Callbacks for indicator data
         self.get_ema_callback: Optional[Callable[[str, int], Optional[float]]] = None
         self.get_adx_callback: Optional[Callable[[str, int], Optional[float]]] = None
+        self.get_atr_callback: Optional[Callable[[str, int], Optional[float]]] = None
         
         self.logger.info(f"RegimeDetector initialized: "
                         f"trend_thresholds={self.trend_thresholds}, "
@@ -67,12 +68,62 @@ class RegimeDetector(LoggerMixin):
     def set_callbacks(
         self,
         get_ema_callback: Callable[[str, int], Optional[float]],
-        get_adx_callback: Callable[[str, int], Optional[float]]
+        get_adx_callback: Callable[[str, int], Optional[float]],
+        get_atr_callback: Optional[Callable[[str, int], Optional[float]]] = None
     ):
         """Set callback functions for indicator data."""
         self.get_ema_callback = get_ema_callback
         self.get_adx_callback = get_adx_callback
+        self.get_atr_callback = get_atr_callback
         self.logger.info("Regime detector callbacks set")
+    
+    def _is_in_warmup(self, symbol: str) -> bool:
+        """
+        Check if symbol is in warmup period (insufficient data for indicators).
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            True if in warmup period, False otherwise
+        """
+        # Get risk-on configuration for ATR periods
+        risk_on_cfg = self.config.get("risk", {}).get("risk_on", {})
+        trigger_cfg = risk_on_cfg.get("trigger", {})
+        atr_period = trigger_cfg.get("atr_period", 14)
+        atr_sma_period = trigger_cfg.get("atr_sma_period", 100)
+        
+        # Check if we have enough data for the longest period needed
+        # We need at least max(EMA200, ADX14, ATR_SMA100) = 200 bars
+        max_period_needed = max(self.ema_slow_period, self.adx_period, atr_sma_period)
+        
+        # Try to get indicators with the longest period needed
+        # If any callback returns None, we're likely in warmup
+        if self.get_ema_callback:
+            try:
+                ema_slow = self.get_ema_callback(symbol, self.ema_slow_period)
+                if ema_slow is None:
+                    return True
+            except Exception:
+                return True
+        
+        if self.get_adx_callback:
+            try:
+                adx = self.get_adx_callback(symbol, self.adx_period)
+                if adx is None:
+                    return True
+            except Exception:
+                return True
+        
+        if self.get_atr_callback:
+            try:
+                atr_sma = self.get_atr_callback(symbol, atr_sma_period)
+                if atr_sma is None:
+                    return True
+            except Exception:
+                return True
+        
+        return False
     
     def detect_regime(self, symbol: str) -> Tuple[str, Dict[str, Any]]:
         """
@@ -83,9 +134,23 @@ class RegimeDetector(LoggerMixin):
             
         Returns:
             Tuple of (regime, details_dict)
-            - regime: "trend" or "range"
+            - regime: "trend", "range", or "unknown (warmup)"
             - details_dict: Dictionary with indicator values and thresholds
         """
+        # Check for warmup conditions first
+        if self._is_in_warmup(symbol):
+            details = {
+                "symbol": symbol,
+                "reason": "insufficient_data_warmup",
+                "regime": "unknown (warmup)",
+                "ema_fast_period": self.ema_fast_period,
+                "ema_slow_period": self.ema_slow_period,
+                "adx_period": self.adx_period,
+                "adx_threshold": self.adx_threshold
+            }
+            self.logger.info(f"REGIME: {symbol} = unknown (warmup) (reason=insufficient_data_warmup)")
+            return "unknown (warmup)", details
+        
         # Get EMA values
         ema_fast = None
         ema_slow = None
@@ -163,7 +228,7 @@ class RegimeDetector(LoggerMixin):
         Get signal thresholds for a specific regime.
         
         Args:
-            regime: Market regime ("trend" or "range")
+            regime: Market regime ("trend", "range", or "unknown (warmup)")
             
         Returns:
             Dictionary with min_score and min_rr thresholds
@@ -172,6 +237,12 @@ class RegimeDetector(LoggerMixin):
             return self.trend_thresholds.copy()
         elif regime == "range":
             return self.range_thresholds.copy()
+        elif regime == "unknown (warmup)":
+            # Use conservative thresholds during warmup
+            return {
+                "min_score": 0.60,  # Higher score requirement during warmup
+                "min_rr": 1.5       # Higher RR requirement during warmup
+            }
         else:
             # Default to range thresholds for unknown regime
             self.logger.warning(f"Unknown regime '{regime}', using range thresholds")
@@ -244,6 +315,96 @@ class RegimeDetector(LoggerMixin):
             )
         
         return is_valid, reason, details
+    
+    def detect_risk_on_trigger(self, symbol: str) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Detect if risk-on mode should be triggered based on ATR/ATR_SMA ratio.
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            Tuple of (risk_on_triggered, details_dict)
+            - risk_on_triggered: Boolean indicating if risk-on should be activated
+            - details_dict: Dictionary with ATR values and ratios
+        """
+        # Get risk-on configuration
+        risk_on_cfg = self.config.get("risk", {}).get("risk_on", {})
+        if not risk_on_cfg.get("enabled", False):
+            return False, {"reason": "risk_on_disabled"}
+        
+        trigger_cfg = risk_on_cfg.get("trigger", {})
+        atr_period = trigger_cfg.get("atr_period", 14)
+        atr_sma_period = trigger_cfg.get("atr_sma_period", 100)
+        atr_over_sma_threshold = trigger_cfg.get("atr_over_sma", 1.15)
+        
+        # Get ATR values from distinct windows
+        atr_current = None
+        atr_sma = None
+        
+        if self.get_atr_callback:
+            try:
+                # Compute ATR(period=14) and ATR_SMA(period=100) from distinct windows
+                atr_current = self.get_atr_callback(symbol, atr_period)
+                atr_sma = self.get_atr_callback(symbol, atr_sma_period)
+            except Exception as e:
+                self.logger.warning(f"Failed to get ATR for {symbol}: {e}")
+        
+        # Create details dictionary
+        details = {
+            "symbol": symbol,
+            "atr_current": atr_current,
+            "atr_sma": atr_sma,
+            "atr_period": atr_period,
+            "atr_sma_period": atr_sma_period,
+            "atr_over_sma_threshold": atr_over_sma_threshold,
+            "reason": "unknown"
+        }
+        
+        # Check if ATR values are available
+        if atr_current is None or atr_sma is None:
+            details["reason"] = "missing_atr_data"
+            self.logger.info(f"RISK-ON: {symbol} = False (reason=missing_atr_data)")
+            return False, details
+        
+        # Check for invalid values
+        if (math.isnan(atr_current) or math.isnan(atr_sma) or
+            atr_current <= 0 or atr_sma <= 0):
+            details["reason"] = "invalid_atr_data"
+            self.logger.info(f"RISK-ON: {symbol} = False (reason=invalid_atr_data)")
+            return False, details
+        
+        # Warmup guard: check if we have enough data for both periods
+        # For ATR(14) we need at least 14 bars, for ATR_SMA(100) we need at least 100 bars
+        min_bars_needed = max(atr_period, atr_sma_period)
+        
+        # Check if we're in warmup period (insufficient data)
+        if self._is_in_warmup(symbol):
+            details["reason"] = "insufficient_data_warmup"
+            details["min_bars_needed"] = min_bars_needed
+            self.logger.info(f"RISK-ON: {symbol} = False (reason=insufficient_data_warmup)")
+            return False, details
+        
+        # Calculate volatility ratio
+        vol_ratio = atr_current / atr_sma if atr_sma > 0 else 1.0
+        risk_on_triggered = vol_ratio >= atr_over_sma_threshold
+        
+        details["vol_ratio"] = vol_ratio
+        details["risk_on_triggered"] = risk_on_triggered
+        details["min_bars_needed"] = min_bars_needed
+        
+        if risk_on_triggered:
+            details["reason"] = "vol_ratio_above_threshold"
+        else:
+            details["reason"] = "vol_ratio_below_threshold"
+        
+        self.logger.info(
+            f"RISK-ON: {symbol} = {risk_on_triggered} (reason={details['reason']}) "
+            f"ATR={atr_current:.4f} ATR_SMA={atr_sma:.4f} vol_ratio={vol_ratio:.3f} "
+            f"threshold={atr_over_sma_threshold:.2f}"
+        )
+        
+        return risk_on_triggered, details
     
     def get_regime_summary(self, symbol: str) -> Dict[str, Any]:
         """

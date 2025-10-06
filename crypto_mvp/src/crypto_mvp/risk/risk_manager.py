@@ -5,7 +5,7 @@ Risk management system for cryptocurrency trading.
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, List
 
 import numpy as np
 
@@ -37,6 +37,16 @@ class RiskMetrics:
     risk_level: RiskLevel
 
 
+@dataclass
+class ExitAction:
+    """Exit action suggestion data structure."""
+    
+    symbol: str
+    qty: float
+    reason: str
+    price_hint: Optional[float] = None
+
+
 class ProfitOptimizedRiskManager(LoggerMixin):
     """Profit-optimized risk manager with Kelly Criterion and volatility/correlation adjustments."""
 
@@ -47,6 +57,7 @@ class ProfitOptimizedRiskManager(LoggerMixin):
             config: Risk management configuration (optional)
         """
         super().__init__()
+        self.initialized = False  # Set this first to avoid attribute errors
         self.config = config or {}
 
         # Risk limits from config
@@ -59,6 +70,11 @@ class ProfitOptimizedRiskManager(LoggerMixin):
         self.max_position_size = self.config.get(
             "max_position_size", 0.20
         )  # 20% max position size
+        
+        # New execution-based risk parameters from config
+        self.per_symbol_cap_pct = self.config.get("per_symbol_cap_pct", 0.15)  # 15% per symbol cap
+        self.session_cap_pct = self.config.get("session_cap_pct", 0.60)  # 60% session cap
+        self.daily_max_loss_pct = self.config.get("daily_max_loss_pct", 0.02)  # 2% daily max loss
         
         # New risk-based sizing parameters
         self.risk_per_trade_pct = self.config.get(
@@ -98,8 +114,6 @@ class ProfitOptimizedRiskManager(LoggerMixin):
         self.positions: dict[str, dict[str, Any]] = {}
         self.portfolio_value = self.config.get("initial_portfolio_value", 100000.0)
         self.risk_metrics: dict[str, RiskMetrics] = {}
-
-        self.initialized = False
 
     def initialize(self) -> None:
         """Initialize the risk manager."""
@@ -1120,25 +1134,42 @@ class ProfitOptimizedRiskManager(LoggerMixin):
             if effective_threshold is None:
                 effective_threshold = 0.65  # Default threshold
             
-            # Dynamic score floor logic
-            if rr_ratio >= 1.60 and (liquidity_ok is None or liquidity_ok):
-                # Strong RR and good liquidity - allow lower score floor
-                score_floor = max(effective_threshold - 0.05, 0.55)
-                floor_reason = "strong_rr_liquidity"
-            else:
-                # Use effective threshold as score floor
-                score_floor = effective_threshold
-                floor_reason = "standard_threshold"
+            # New effective gate calculation with volatility-aware easing
+            gate_cfg = self.config.get("risk", {}).get("entry_gate", {})
+            gate_margin = gate_cfg.get("gate_margin", 0.01)
+            hard_floor_min = gate_cfg.get("hard_floor_min", 0.53)
             
-            # Check composite score against dynamic floor
-            if composite_score < score_floor:
+            # Base effective gate: adaptive threshold minus margin, but not below hard floor
+            effective_gate = max(effective_threshold - gate_margin, hard_floor_min)
+            
+            # Optional volatility-aware easing
+            if gate_cfg.get("enable_vol_gate_easing", True):
+                # Try to get ATR context from signal metadata
+                signal_metadata = signal.get("metadata", {})
+                atr = signal_metadata.get("atr")
+                atr_sma = signal_metadata.get("atr_sma")
+                
+                if atr is not None and atr_sma is not None and atr_sma > 1e-9:
+                    vol_z = (atr / atr_sma) - 1.0
+                    vol_z = max(-gate_cfg.get("vol_ease_max", 0.5), 
+                               min(vol_z, gate_cfg.get("vol_ease_max", 0.5)))
+                    vol_ease_adjustment = gate_cfg.get("vol_ease_k", 0.02) * vol_z
+                    effective_gate = max(hard_floor_min, effective_gate - vol_ease_adjustment)
+            
+            # Legacy compatibility: keep score_floor for backward compatibility
+            score_floor = effective_gate
+            floor_reason = "effective_gate"
+            
+            # Check composite score against effective gate
+            if composite_score < effective_gate:
                 return {
                     'valid': False,
-                    'skip_reason': f'low_score score_floor={score_floor:.3f} score={composite_score:.3f} rr={rr_ratio:.2f}',
-                    'details': f"Composite score {composite_score:.3f} below floor {score_floor:.3f} (RR={rr_ratio:.2f})",
+                    'skip_reason': f'low_score effective_gate={effective_gate:.3f} score={composite_score:.3f} thr={effective_threshold:.3f} floor={hard_floor_min:.3f} rr={rr_ratio:.2f}',
+                    'details': f"Composite score {composite_score:.3f} below effective gate {effective_gate:.3f} (RR={rr_ratio:.2f})",
                     'risk_reward_ratio': rr_ratio,
                     'score_floor': score_floor,
-                    'floor_reason': floor_reason
+                    'floor_reason': floor_reason,
+                    'effective_gate': effective_gate
                 }
             
             # All validations passed
@@ -1157,6 +1188,305 @@ class ProfitOptimizedRiskManager(LoggerMixin):
                 'skip_reason': 'validation_error',
                 'details': f"Validation error: {e}"
             }
+
+    def build_exit_actions(self, portfolio: dict[str, Any], marks: dict[str, float]) -> List[ExitAction]:
+        """Build exit action suggestions based on chandelier stops and time stops.
+        
+        Args:
+            portfolio: Portfolio dictionary with positions
+            marks: Current market prices for symbols
+            
+        Returns:
+            List of ExitAction suggestions
+        """
+        exit_actions = []
+        
+        try:
+            # Get exit configuration with safe defaults
+            exit_cfg = self.config.get("risk", {}).get("exits", {})
+            enable_chandelier = exit_cfg.get("enable_chandelier", True)
+            chandelier_n_atr = exit_cfg.get("chandelier_n_atr", 2.5)
+            time_stop_bars = exit_cfg.get("time_stop_bars", 60)
+            min_qty = exit_cfg.get("min_qty", 1e-9)
+            
+            positions = portfolio.get("positions", {})
+            
+            for symbol, position in positions.items():
+                try:
+                    # Skip if no current price available
+                    if symbol not in marks or marks[symbol] <= 0:
+                        continue
+                        
+                    mark = marks[symbol]
+                    qty = position.get("quantity", 0)
+                    
+                    # Skip if quantity is too small
+                    if abs(qty) <= min_qty:
+                        continue
+                    
+                    # Get position metadata
+                    meta = position.get("meta", {})
+                    entry_price = position.get("entry_price", position.get("avg_price", mark))
+                    
+                    # Fetch ATR(14) - try to get from existing indicator access
+                    atr = self._get_atr_for_symbol(symbol, mark)
+                    
+                    # Chandelier Stop Logic
+                    if enable_chandelier:
+                        chandelier_action = self._check_chandelier_stop(
+                            symbol, position, mark, atr, chandelier_n_atr
+                        )
+                        if chandelier_action:
+                            exit_actions.append(chandelier_action)
+                    
+                    # Time Stop Logic
+                    time_action = self._check_time_stop(
+                        symbol, position, mark, atr, time_stop_bars
+                    )
+                    if time_action:
+                        exit_actions.append(time_action)
+                        
+                except Exception as e:
+                    self.logger.warning(f"Error processing exit for {symbol}: {e}")
+                    continue
+                    
+        except Exception as e:
+            self.logger.error(f"Error in build_exit_actions: {e}")
+            
+        return exit_actions
+    
+    def _get_atr_for_symbol(self, symbol: str, fallback_price: float) -> float:
+        """Get ATR(14) for symbol with fallback.
+        
+        Args:
+            symbol: Trading symbol
+            fallback_price: Fallback price for ATR calculation
+            
+        Returns:
+            ATR value
+        """
+        try:
+            # Try to get ATR from data engine if available
+            # This is a placeholder - in real implementation, you'd access the data engine
+            # For now, use fallback calculation
+            fallback_atr = 0.005 * fallback_price  # 0.5% of price as fallback
+            return fallback_atr
+        except Exception as e:
+            self.logger.debug(f"ATR calculation failed for {symbol}: {e}")
+            return 0.005 * fallback_price
+    
+    def _check_chandelier_stop(
+        self, 
+        symbol: str, 
+        position: dict[str, Any], 
+        mark: float, 
+        atr: float, 
+        n_atr: float
+    ) -> Optional[ExitAction]:
+        """Check chandelier stop conditions.
+        
+        Args:
+            symbol: Trading symbol
+            position: Position data
+            mark: Current market price
+            atr: ATR value
+            n_atr: ATR multiplier
+            
+        Returns:
+            ExitAction if stop triggered, None otherwise
+        """
+        try:
+            qty = position.get("quantity", 0)
+            entry_price = position.get("entry_price", position.get("avg_price", mark))
+            meta = position.get("meta", {})
+            
+            # Determine position side
+            is_long = qty > 0
+            
+            if is_long:
+                # LONG position: stop = high_since_entry - n_atr * atr
+                high_since_entry = meta.get("high_since_entry", entry_price)
+                stop_price = high_since_entry - (n_atr * atr)
+                
+                if mark <= stop_price:
+                    return ExitAction(
+                        symbol=symbol,
+                        qty=abs(qty),
+                        reason=f"chandelier_stop @{stop_price:.6f}",
+                        price_hint=mark
+                    )
+            else:
+                # SHORT position: stop = low_since_entry + n_atr * atr
+                low_since_entry = meta.get("low_since_entry", entry_price)
+                stop_price = low_since_entry + (n_atr * atr)
+                
+                if mark >= stop_price:
+                    return ExitAction(
+                        symbol=symbol,
+                        qty=abs(qty),
+                        reason=f"chandelier_stop @{stop_price:.6f}",
+                        price_hint=mark
+                    )
+                    
+        except Exception as e:
+            self.logger.warning(f"Error checking chandelier stop for {symbol}: {e}")
+            
+        return None
+    
+    def _check_time_stop(
+        self, 
+        symbol: str, 
+        position: dict[str, Any], 
+        mark: float, 
+        atr: float, 
+        time_stop_bars: int
+    ) -> Optional[ExitAction]:
+        """Check time stop conditions.
+        
+        Args:
+            symbol: Trading symbol
+            position: Position data
+            mark: Current market price
+            atr: ATR value
+            time_stop_bars: Time stop threshold in bars
+            
+        Returns:
+            ExitAction if time stop triggered, None otherwise
+        """
+        try:
+            qty = position.get("quantity", 0)
+            entry_price = position.get("entry_price", position.get("avg_price", mark))
+            meta = position.get("meta", {})
+            
+            bars_since_entry = meta.get("bars_since_entry", 0)
+            
+            # Check if time stop threshold reached
+            if bars_since_entry >= time_stop_bars:
+                # Check if unrealized progress < 0.5 * atr
+                unrealized_progress = abs(mark - entry_price)
+                progress_threshold = 0.5 * atr
+                
+                if unrealized_progress < progress_threshold:
+                    return ExitAction(
+                        symbol=symbol,
+                        qty=abs(qty),
+                        reason=f"time_stop_{bars_since_entry}bars",
+                        price_hint=mark
+                    )
+                    
+        except Exception as e:
+            self.logger.warning(f"Error checking time stop for {symbol}: {e}")
+            
+        return None
+
+    def check_daily_loss_limit(
+        self, 
+        state_store: Optional[Any] = None, 
+        session_id: Optional[str] = None,
+        current_equity: Optional[float] = None,
+        is_first_cycle: bool = False
+    ) -> tuple[bool, str]:
+        """Check if daily loss limit has been exceeded and manage halt flag.
+        
+        Args:
+            state_store: StateStore instance for session metadata
+            session_id: Current session identifier
+            current_equity: Current equity value for loss calculation
+            is_first_cycle: Whether this is the first trading cycle
+            
+        Returns:
+            Tuple of (should_halt_new_entries, reason)
+        """
+        if not state_store or not session_id:
+            return False, "no_state_store_or_session"
+        
+        # Check if already halted
+        halt_flag = state_store.get_session_metadata(
+            session_id, "halt_new_entries_today", False
+        )
+        if halt_flag:
+            return True, "already_halted"
+        
+        if current_equity is None:
+            return False, "no_equity_data"
+        
+        # First-cycle bypass: Skip daily loss limit check if no trades have been executed yet
+        if is_first_cycle:
+            # Check if any trades have been executed in this session
+            try:
+                # Get trade count from state store or trade ledger
+                trades_executed = state_store.get_session_metadata(
+                    session_id, "trades_executed_count", 0
+                )
+                if trades_executed == 0:
+                    self.logger.info("DAILY_LOSS_CHECK: Skipping first cycle - no trades executed yet")
+                    return False, "first_cycle_no_trades"
+            except Exception as e:
+                self.logger.warning(f"Error checking trade count for first cycle bypass: {e}")
+                # Continue with normal check if we can't determine trade count
+        
+        # Get session start equity (assuming it's stored or can be calculated)
+        session_start_equity = state_store.get_session_metadata(
+            session_id, "session_start_equity", current_equity
+        )
+        
+        # Edge case check: if current_equity == 0.0 and session_start_equity > 0, return False (no halt)
+        if current_equity == 0.0 and session_start_equity > 0:
+            self.logger.info(f"DAILY_LOSS_CHECK: current_equity=$0.00 but session_start_equity=${session_start_equity:.2f} - skipping halt (likely initialization issue)")
+            return False, "zero_equity_with_start_capital"
+        
+        # Edge case check: if no trades have been executed in this session, return False (no halt)
+        try:
+            trades_executed = state_store.get_session_metadata(
+                session_id, "trades_executed_count", 0
+            )
+            if trades_executed == 0:
+                self.logger.info(f"DAILY_LOSS_CHECK: No trades executed in session - skipping halt")
+                return False, "no_trades_executed"
+        except Exception as e:
+            self.logger.warning(f"Error checking trade count for daily loss limit: {e}")
+            # Continue with normal check if we can't determine trade count
+        
+        # Calculate daily loss
+        daily_loss = session_start_equity - current_equity
+        daily_loss_pct = daily_loss / session_start_equity if session_start_equity > 0 else 0.0
+        
+        # Enhanced logging with all key values
+        self.logger.info(f"DAILY_LOSS_CHECK: current=${current_equity:.2f}, start=${session_start_equity:.2f}, loss_pct={daily_loss_pct:.3f}")
+        self.logger.debug(
+            f"DAILY_LOSS_CHECK: start_equity=${session_start_equity:.2f} "
+            f"current_equity=${current_equity:.2f} loss=${daily_loss:.2f} "
+            f"loss_pct={daily_loss_pct:.3f} limit={self.daily_max_loss_pct:.3f}"
+        )
+        
+        # Check if daily loss limit exceeded - only trigger halt if: loss_pct >= limit AND trades_executed > 0
+        if daily_loss_pct >= self.daily_max_loss_pct:
+            # Double-check that trades have been executed before halting
+            try:
+                trades_executed = state_store.get_session_metadata(
+                    session_id, "trades_executed_count", 0
+                )
+                if trades_executed > 0:
+                    # Set halt flag
+                    state_store.set_session_metadata(
+                        session_id, "halt_new_entries_today", True
+                    )
+                    
+                    self.logger.warning(
+                        f"HALT: daily max loss reached - loss_pct={daily_loss_pct:.3f} "
+                        f"limit={self.daily_max_loss_pct:.3f} loss=${daily_loss:.2f} trades={trades_executed}"
+                    )
+                    
+                    return True, "daily_loss_limit_exceeded"
+                else:
+                    self.logger.info(f"DAILY_LOSS_CHECK: Loss limit exceeded but no trades executed - skipping halt")
+                    return False, "loss_limit_exceeded_but_no_trades"
+            except Exception as e:
+                self.logger.warning(f"Error checking trade count for halt decision: {e}")
+                # If we can't determine trade count, err on the side of caution and don't halt
+                return False, "error_checking_trades"
+        
+        return False, "within_limits"
 
 
 # Legacy RiskManager class for backward compatibility

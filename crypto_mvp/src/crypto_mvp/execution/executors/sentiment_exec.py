@@ -60,7 +60,7 @@ class SentimentExecutor(LoggerMixin):
             )
 
             # Create order
-            order_id = self.order_manager.create_order(
+            order, error_reason = self.order_manager.create_order(
                 symbol=symbol,
                 side=order_side,
                 order_type=OrderType.MARKET,
@@ -73,16 +73,19 @@ class SentimentExecutor(LoggerMixin):
                 },
             )
 
+            if not order:
+                return {"status": "failed", "reason": f"Order creation failed: {error_reason}"}
+
             # Submit order
-            success = self.order_manager.submit_order(order_id)
+            success = self.order_manager.submit_order(order.id)
 
             if success:
                 # Set stop loss and take profit
-                self._set_risk_management(order_id, symbol, current_price, order_side)
+                self._set_risk_management(order.id, symbol, current_price, order_side)
 
                 return {
                     "status": "executed",
-                    "order_id": order_id,
+                    "order_id": order.id,
                     "position_size": position_size,
                     "order_side": order_side.value,
                 }
@@ -225,16 +228,34 @@ class SentimentExecutor(LoggerMixin):
             order_side: Order side
         """
         try:
-            # Calculate stop loss and take profit prices
-            if order_side == OrderSide.BUY:
-                stop_loss_price = current_price * (1 - self.stop_loss_pct)
-                take_profit_price = current_price * (1 + self.take_profit_pct)
-            else:  # SELL
-                stop_loss_price = current_price * (1 + self.stop_loss_pct)
-                take_profit_price = current_price * (1 - self.take_profit_pct)
+            # Use stop model for SL/TP calculation if available
+            if hasattr(self.order_manager, 'stop_model'):
+                stop_loss_price, take_profit_price, metadata = self.order_manager.stop_model.calculate_stop_take_profit(
+                    symbol=symbol,
+                    entry_price=current_price,
+                    side=order_side.value,
+                    data_engine=getattr(self.order_manager, 'data_engine', None)
+                )
+                
+                if stop_loss_price is None or take_profit_price is None:
+                    # Fallback to percent-based calculation
+                    if order_side == OrderSide.BUY:
+                        stop_loss_price = current_price * (1 - self.stop_loss_pct)
+                        take_profit_price = current_price * (1 + self.take_profit_pct)
+                    else:  # SELL
+                        stop_loss_price = current_price * (1 + self.stop_loss_pct)
+                        take_profit_price = current_price * (1 - self.take_profit_pct)
+            else:
+                # Calculate stop loss and take profit prices using percent-based method
+                if order_side == OrderSide.BUY:
+                    stop_loss_price = current_price * (1 - self.stop_loss_pct)
+                    take_profit_price = current_price * (1 + self.take_profit_pct)
+                else:  # SELL
+                    stop_loss_price = current_price * (1 + self.stop_loss_pct)
+                    take_profit_price = current_price * (1 - self.take_profit_pct)
 
             # Create stop loss order
-            stop_loss_order_id = self.order_manager.create_order(
+            stop_loss_order, stop_loss_error = self.order_manager.create_order(
                 symbol=symbol,
                 side=OrderSide.SELL if order_side == OrderSide.BUY else OrderSide.BUY,
                 order_type=OrderType.STOP,
@@ -249,7 +270,7 @@ class SentimentExecutor(LoggerMixin):
             )
 
             # Create take profit order
-            take_profit_order_id = self.order_manager.create_order(
+            take_profit_order, take_profit_error = self.order_manager.create_order(
                 symbol=symbol,
                 side=OrderSide.SELL if order_side == OrderSide.BUY else OrderSide.BUY,
                 order_type=OrderType.LIMIT,
@@ -262,10 +283,17 @@ class SentimentExecutor(LoggerMixin):
                 },
             )
 
-            self.logger.info(
-                f"Set risk management for order {order_id}: "
-                f"SL={stop_loss_price:.2f}, TP={take_profit_price:.2f}"
-            )
+            # Log results
+            if stop_loss_order and take_profit_order:
+                self.logger.info(
+                    f"Set risk management for order {order_id}: "
+                    f"SL={stop_loss_price:.2f}, TP={take_profit_price:.2f}"
+                )
+            else:
+                if not stop_loss_order:
+                    self.logger.warning(f"Failed to create stop loss order: {stop_loss_error}")
+                if not take_profit_order:
+                    self.logger.warning(f"Failed to create take profit order: {take_profit_error}")
 
         except Exception as e:
             self.logger.error(f"Failed to set risk management: {e}")

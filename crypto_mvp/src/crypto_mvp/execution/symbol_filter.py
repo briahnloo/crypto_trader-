@@ -33,9 +33,9 @@ class SymbolFilter(LoggerMixin):
         super().__init__()
         self.config = config
         
-        # Universe settings
-        universe_config = config.get("universe", {})
-        self.whitelist = universe_config.get("whitelist", [])
+        # Symbol whitelist settings
+        trading_config = config.get("trading", {})
+        self.whitelist = trading_config.get("symbol_whitelist", [])
         
         # Normalize whitelist symbols (uppercase for consistent matching)
         self.whitelist_normalized = [symbol.upper() for symbol in self.whitelist]

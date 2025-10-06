@@ -182,14 +182,15 @@ def format_daily_summary(
         f"notional=${total_notional:,.2f}"
     ]
     
-    # Add P&L information
+    # Add P&L information with clear separation and warnings
     if abs(realized_pnl) > 1e-6:  # Use small epsilon for float comparison
-        summary_parts.append(f"realized_pnl=${realized_pnl:.2f}")
+        summary_parts.append(f"🎯 Trading P&L=${realized_pnl:.2f} (actual profits)")
     if abs(unrealized_pnl) > 1e-6:  # Use small epsilon for float comparison
-        summary_parts.append(f"unrealized_pnl=${unrealized_pnl:.2f}")
+        summary_parts.append(f"📈 Unrealized P&L=${unrealized_pnl:.2f} (price fluctuations)")
+        summary_parts.append("⚠️  Unrealized gains are NOT real profits!")
     
     if daily_pnl != 0:
-        summary_parts.append(f"daily_pnl=${daily_pnl:.2f}")
+        summary_parts.append(f"💰 Total P&L=${daily_pnl:.2f}")
     
     # Add performance metrics
     if profit_factor != "n/a":
@@ -218,9 +219,14 @@ def format_position_breakdown(snapshot: PortfolioSnapshot) -> str:
         value = snapshot.get_position_value(symbol)
         pnl = snapshot.get_position_pnl(symbol)
         
+        # Add warning for unrealized P&L
+        pnl_warning = ""
+        if abs(pnl) > 0.01:  # If there's significant unrealized P&L
+            pnl_warning = " ⚠️ (unrealized - not real profit!)"
+        
         positions_info.append(
             f"{symbol} qty={position.qty:.6f} @ ${mark_price:.4f} "
-            f"avg_cost=${position.avg_cost:.4f} value=${value:.2f} pnl=${pnl:.2f}"
+            f"avg_cost=${position.avg_cost:.4f} value=${value:.2f} pnl=${pnl:.2f}{pnl_warning}"
         )
     
     pos_count = positions_count(snapshot)
