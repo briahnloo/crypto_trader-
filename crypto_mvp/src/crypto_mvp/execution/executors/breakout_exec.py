@@ -194,13 +194,21 @@ class BreakoutExecutor(LoggerMixin):
             order_side: Order side
         """
         try:
-            # Calculate stop loss and take profit prices
+            # Import Decimal helper
+            from ...core.money import to_dec, ONE
+            
+            # Convert to Decimal for safe math
+            price_dec = to_dec(current_price)
+            sl_pct_dec = to_dec(self.stop_loss_pct)
+            tp_pct_dec = to_dec(self.take_profit_pct)
+            
+            # Calculate stop loss and take profit prices using Decimal
             if order_side == OrderSide.BUY:
-                stop_loss_price = current_price * (1 - self.stop_loss_pct)
-                take_profit_price = current_price * (1 + self.take_profit_pct)
+                stop_loss_price = float(price_dec * (ONE - sl_pct_dec))
+                take_profit_price = float(price_dec * (ONE + tp_pct_dec))
             else:  # SELL
-                stop_loss_price = current_price * (1 + self.stop_loss_pct)
-                take_profit_price = current_price * (1 - self.take_profit_pct)
+                stop_loss_price = float(price_dec * (ONE + sl_pct_dec))
+                take_profit_price = float(price_dec * (ONE - tp_pct_dec))
 
             # Create stop loss order
             stop_loss_order, stop_loss_error = self.order_manager.create_order(

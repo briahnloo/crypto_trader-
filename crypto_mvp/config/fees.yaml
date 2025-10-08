@@ -1,0 +1,15 @@
+# Fee and Slippage Configuration
+# Single source of truth for fee schedules and slippage modeling
+
+venue_defaults:
+  # Default venue fees in basis points (bps)
+  # 1 bps = 0.01%, 100 bps = 1%
+  maker_bps: 2.0   # Maker fee: 2 bps = 0.02%
+  taker_bps: 5.0   # Taker fee: 5 bps = 0.05%
+
+slippage:
+  # Market impact slippage model: max((notional/50000)*5bps, 0) capped at 8bps
+  base_bps: 5.0           # Base slippage per scale unit
+  cap_bps: 8.0            # Maximum slippage cap
+  notional_scale: 50000   # Scale factor ($50k notional)
+

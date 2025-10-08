@@ -45,6 +45,9 @@ class TradeLedger(LoggerMixin):
                         side TEXT NOT NULL,
                         quantity REAL NOT NULL,
                         fill_price REAL NOT NULL,
+                        effective_fill_price REAL,
+                        fee_bps_applied REAL,
+                        slippage_bps_applied REAL,
                         fees REAL NOT NULL,
                         notional_value REAL NOT NULL,
                         strategy TEXT NOT NULL,
@@ -84,16 +87,33 @@ class TradeLedger(LoggerMixin):
     def _run_migrations(self, cursor) -> None:
         """Run database migrations for schema updates."""
         try:
-            # Check if exit_reason column exists
+            # Check current columns
             cursor.execute("PRAGMA table_info(trades)")
             columns = [row[1] for row in cursor.fetchall()]
             
+            # Add exit_reason column if missing
             if 'exit_reason' not in columns:
                 self.logger.info("Adding exit_reason column to trades table")
                 cursor.execute("ALTER TABLE trades ADD COLUMN exit_reason TEXT")
                 self.logger.info("Successfully added exit_reason column")
-            else:
-                self.logger.debug("exit_reason column already exists")
+            
+            # Add effective_fill_price column if missing
+            if 'effective_fill_price' not in columns:
+                self.logger.info("Adding effective_fill_price column to trades table")
+                cursor.execute("ALTER TABLE trades ADD COLUMN effective_fill_price REAL")
+                self.logger.info("Successfully added effective_fill_price column")
+            
+            # Add fee_bps_applied column if missing
+            if 'fee_bps_applied' not in columns:
+                self.logger.info("Adding fee_bps_applied column to trades table")
+                cursor.execute("ALTER TABLE trades ADD COLUMN fee_bps_applied REAL")
+                self.logger.info("Successfully added fee_bps_applied column")
+            
+            # Add slippage_bps_applied column if missing
+            if 'slippage_bps_applied' not in columns:
+                self.logger.info("Adding slippage_bps_applied column to trades table")
+                cursor.execute("ALTER TABLE trades ADD COLUMN slippage_bps_applied REAL")
+                self.logger.info("Successfully added slippage_bps_applied column")
                 
         except Exception as e:
             self.logger.error(f"Failed to run migrations: {e}")
@@ -110,7 +130,10 @@ class TradeLedger(LoggerMixin):
         fees: float,
         strategy: str = "unknown",
         exit_reason: Optional[str] = None,
-        executed_at: Optional[datetime] = None
+        executed_at: Optional[datetime] = None,
+        effective_fill_price: Optional[float] = None,
+        fee_bps_applied: Optional[float] = None,
+        slippage_bps_applied: Optional[float] = None
     ) -> bool:
         """Commit a fill to the trade ledger.
         
@@ -120,11 +143,14 @@ class TradeLedger(LoggerMixin):
             symbol: Trading symbol
             side: Trade side (buy/sell)
             quantity: Trade quantity
-            fill_price: Fill price
+            fill_price: Fill price (mark price before slippage)
             fees: Trading fees
             strategy: Strategy name
             exit_reason: Exit reason for exit orders (optional)
             executed_at: Execution timestamp (defaults to now)
+            effective_fill_price: Fill price after slippage (optional)
+            fee_bps_applied: Fee basis points applied (optional)
+            slippage_bps_applied: Slippage basis points applied (optional)
             
         Returns:
             True if successfully committed, False otherwise
@@ -138,17 +164,37 @@ class TradeLedger(LoggerMixin):
         # Get date for partitioning
         trade_date = executed_at.date().isoformat()
         
+        # Use effective fill price if not provided
+        if effective_fill_price is None:
+            effective_fill_price = fill_price
+        
         try:
+            self.logger.info(f"TRADE_LEDGER_COMMIT: Starting commit for trade {trade_id}")
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
-                # Check if exit_reason column exists
+                # Check which columns exist
                 cursor.execute("PRAGMA table_info(trades)")
                 columns = [row[1] for row in cursor.fetchall()]
                 has_exit_reason = 'exit_reason' in columns
+                has_effective_fill = 'effective_fill_price' in columns
+                self.logger.info(f"TRADE_LEDGER_COMMIT: has_exit_reason={has_exit_reason}, has_effective_fill={has_effective_fill}")
                 
-                if has_exit_reason:
-                    # Insert trade record with exit_reason
+                if has_exit_reason and has_effective_fill:
+                    # Insert trade record with all fields
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO trades (
+                            trade_id, session_id, symbol, side, quantity, fill_price,
+                            effective_fill_price, fee_bps_applied, slippage_bps_applied,
+                            fees, notional_value, strategy, exit_reason, executed_at, date
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        trade_id, session_id, symbol, side, quantity, fill_price,
+                        effective_fill_price, fee_bps_applied, slippage_bps_applied,
+                        fees, notional_value, strategy, exit_reason, executed_at.isoformat(), trade_date
+                    ))
+                elif has_exit_reason:
+                    # Insert trade record with exit_reason but not effective_fill
                     cursor.execute("""
                         INSERT OR REPLACE INTO trades (
                             trade_id, session_id, symbol, side, quantity, fill_price,
@@ -173,10 +219,21 @@ class TradeLedger(LoggerMixin):
                 
                 conn.commit()
                 
-                self.logger.debug(
-                    f"Committed fill to ledger: {symbol} {side} {quantity:.6f} @ ${fill_price:.4f} "
-                    f"fees=${fees:.4f} notional=${notional_value:.2f}"
-                )
+                self.logger.info(f"TRADE_LEDGER_COMMIT: Successfully committed trade {trade_id} to database")
+                
+                # Log fill with enhanced details
+                if fee_bps_applied or slippage_bps_applied:
+                    self.logger.info(
+                        f"FILL: {symbol} {side} {quantity:.6f} @ mark=${fill_price:.4f} → "
+                        f"effective=${effective_fill_price:.4f} "
+                        f"(fee={fee_bps_applied:.2f}bps, slip={slippage_bps_applied:.2f}bps), "
+                        f"fees=${fees:.4f} notional=${notional_value:.2f}"
+                    )
+                else:
+                    self.logger.debug(
+                        f"Committed fill to ledger: {symbol} {side} {quantity:.6f} @ ${fill_price:.4f} "
+                        f"fees=${fees:.4f} notional=${notional_value:.2f}"
+                    )
                 
                 return True
                 
@@ -369,6 +426,7 @@ class TradeLedger(LoggerMixin):
         if not valid_trades:
             return {
                 "total_trades": 0,
+                "trade_count": 0,  # Number of fills
                 "total_volume": 0.0,
                 "total_fees": 0.0,
                 "total_notional": 0.0,
@@ -400,8 +458,8 @@ class TradeLedger(LoggerMixin):
             if not is_reduce_only:
                 new_exposure_trades.append(trade)
         
-        # Volume and notional: only count new exposure (exclude reduce-only exits)
-        total_volume = sum(abs(trade['quantity']) for trade in new_exposure_trades)
+        # Volume: sum of absolute fill notional values (quote currency) for new exposure trades
+        total_volume = sum(abs(trade['notional_value']) for trade in new_exposure_trades)
         total_notional = sum(trade['notional_value'] for trade in new_exposure_trades)
         
         # Fees: count from all fills (including reduce-only exits)
@@ -413,13 +471,20 @@ class TradeLedger(LoggerMixin):
         symbols_traded = list(set(trade['symbol'] for trade in valid_trades))
         strategies_used = list(set(trade['strategy'] for trade in valid_trades))
         
-        trade_sizes = [abs(trade['quantity']) for trade in valid_trades]
-        avg_trade_size = sum(trade_sizes) / len(trade_sizes) if trade_sizes else 0.0
+        # Trade count: number of fills (all valid trades)
+        trade_count = len(valid_trades)
+        
+        # Average trade size: total volume / trade count (with division by zero guard)
+        avg_trade_size = total_volume / trade_count if trade_count > 0 else 0.0
+        
+        # Trade size statistics (for largest/smallest trade)
+        trade_sizes = [abs(trade['notional_value']) for trade in valid_trades]
         largest_trade = max(trade_sizes) if trade_sizes else 0.0
         smallest_trade = min(trade_sizes) if trade_sizes else 0.0
         
         return {
             "total_trades": total_trades,
+            "trade_count": trade_count,  # Number of fills
             "total_volume": total_volume,
             "total_fees": total_fees,
             "total_notional": total_notional,

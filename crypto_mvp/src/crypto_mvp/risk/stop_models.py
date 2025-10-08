@@ -3,9 +3,13 @@ Stop Loss and Take Profit models with ATR-based calculation and safe fallbacks.
 """
 
 import math
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Union
+from decimal import Decimal, getcontext
 from crypto_mvp.core.logging_utils import LoggerMixin
 from crypto_mvp.indicators.atr_service import ATRService
+
+# Set decimal precision
+getcontext().prec = 28
 
 
 class StopModel(LoggerMixin):
@@ -35,19 +39,19 @@ class StopModel(LoggerMixin):
         sl_tp_config = config.get("risk", {}).get("sl_tp", {})
         
         # ATR multipliers
-        self.atr_mult_sl = sl_tp_config.get("atr_mult_sl", 1.2)
-        self.atr_mult_tp = sl_tp_config.get("atr_mult_tp", 2.0)
+        self.atr_mult_sl = Decimal(str(sl_tp_config.get("atr_mult_sl", 1.2)))
+        self.atr_mult_tp = Decimal(str(sl_tp_config.get("atr_mult_tp", 2.0)))
         
         # Fallback percentages - use fallback_stop_frac from risk config if available
         risk_config = config.get("risk", {})
-        fallback_stop_frac = risk_config.get("fallback_stop_frac", 0.005)  # 0.5% default
+        fallback_stop_frac = Decimal(str(risk_config.get("fallback_stop_frac", 0.005)))  # 0.5% default
         
-        self.fallback_pct_sl = sl_tp_config.get("fallback_pct_sl", fallback_stop_frac)
-        self.fallback_pct_tp = sl_tp_config.get("fallback_pct_tp", fallback_stop_frac * 2)  # 2x for TP
+        self.fallback_pct_sl = Decimal(str(sl_tp_config.get("fallback_pct_sl", fallback_stop_frac)))
+        self.fallback_pct_tp = Decimal(str(sl_tp_config.get("fallback_pct_tp", fallback_stop_frac * 2)))  # 2x for TP
         
         # Absolute guardrails for small-price assets
-        self.min_sl_abs = sl_tp_config.get("min_sl_abs", 0.001)
-        self.min_tp_abs = sl_tp_config.get("min_tp_abs", 0.002)
+        self.min_sl_abs = Decimal(str(sl_tp_config.get("min_sl_abs", 0.001)))
+        self.min_tp_abs = Decimal(str(sl_tp_config.get("min_tp_abs", 0.002)))
         
         # Track fallback usage per symbol per cycle
         self._fallback_logged = set()
@@ -58,7 +62,7 @@ class StopModel(LoggerMixin):
     def calculate_stop_take_profit(
         self,
         symbol: str,
-        entry_price: float,
+        entry_price: Union[float, Decimal],
         side: str,
         data_engine: Optional[Any] = None,
         symbol_info: Optional[Dict[str, Any]] = None
@@ -76,35 +80,37 @@ class StopModel(LoggerMixin):
         Returns:
             Tuple of (stop_loss, take_profit, metadata)
         """
-        if entry_price <= 0:
-            self.logger.warning(f"Invalid entry price for {symbol}: {entry_price}")
+        entry_decimal = Decimal(str(entry_price)) if not isinstance(entry_price, Decimal) else entry_price
+        
+        if entry_decimal <= 0:
+            self.logger.warning(f"Invalid entry price for {symbol}: {entry_decimal}")
             return None, None, {"error": "invalid_entry_price"}
         
         # Get symbol info with defaults
         if symbol_info is None:
             symbol_info = self._get_default_symbol_info(symbol)
         
-        tick_size = symbol_info.get("tick_size", 0.01)
+        tick_size = Decimal(str(symbol_info.get("tick_size", 0.01)))
         
         # Try to get ATR-based distances
         sl_distance, tp_distance, atr_value = self._get_atr_based_distances(
-            symbol, entry_price, data_engine
+            symbol, entry_decimal, data_engine
         )
         
         # Calculate SL/TP prices
         if side.upper() == "BUY":
-            stop_loss = entry_price - sl_distance
-            take_profit = entry_price + tp_distance
+            stop_loss = entry_decimal - sl_distance
+            take_profit = entry_decimal + tp_distance
         else:  # SELL
-            stop_loss = entry_price + sl_distance
-            take_profit = entry_price - tp_distance
+            stop_loss = entry_decimal + sl_distance
+            take_profit = entry_decimal - tp_distance
         
         # Ensure SL/TP are never equal to entry
-        if abs(stop_loss - entry_price) < tick_size:
-            stop_loss = entry_price + (tick_size if side.upper() == "SELL" else -tick_size)
+        if abs(stop_loss - entry_decimal) < tick_size:
+            stop_loss = entry_decimal + (tick_size if side.upper() == "SELL" else -tick_size)
         
-        if abs(take_profit - entry_price) < tick_size:
-            take_profit = entry_price + (tick_size if side.upper() == "BUY" else -tick_size)
+        if abs(take_profit - entry_decimal) < tick_size:
+            take_profit = entry_decimal + (tick_size if side.upper() == "BUY" else -tick_size)
         
         # Round to tick size
         stop_loss = self._round_to_tick(stop_loss, tick_size)
@@ -112,22 +118,22 @@ class StopModel(LoggerMixin):
         
         # Prepare metadata
         metadata = {
-            "atr_value": atr_value,
+            "atr_value": float(atr_value) if atr_value is not None else None,
             "atr_based": atr_value is not None,
-            "sl_distance": sl_distance,
-            "tp_distance": tp_distance,
-            "tick_size": tick_size,
+            "sl_distance": float(sl_distance),
+            "tp_distance": float(tp_distance),
+            "tick_size": float(tick_size),
             "fallback_used": atr_value is None
         }
         
-        return stop_loss, take_profit, metadata
+        return float(stop_loss), float(take_profit), metadata
     
     def _get_atr_based_distances(
         self,
         symbol: str,
-        entry_price: float,
+        entry_price: Decimal,
         data_engine: Optional[Any]
-    ) -> Tuple[float, float, Optional[float]]:
+    ) -> Tuple[Decimal, Decimal, Optional[Decimal]]:
         """
         Get ATR-based stop loss and take profit distances.
         
@@ -143,7 +149,8 @@ class StopModel(LoggerMixin):
         
         # Try to get ATR from service
         if self.atr_service and data_engine:
-            atr_value = self.atr_service.get_atr(symbol, data_engine)
+            atr_raw = self.atr_service.get_atr(symbol, data_engine)
+            atr_value = Decimal(str(atr_raw)) if atr_raw is not None else None
         
         if atr_value is not None and atr_value > 0:
             # Use ATR-based distances
@@ -183,45 +190,45 @@ class StopModel(LoggerMixin):
         """
         symbol_info_map = {
             "BTC/USDT": {
-                "tick_size": 0.01,
-                "step_size": 0.001,
-                "min_notional": 10.0,
+                "tick_size": Decimal('0.01'),
+                "step_size": Decimal('0.001'),
+                "min_notional": Decimal('10.0'),
                 "supports_short": True
             },
             "ETH/USDT": {
-                "tick_size": 0.01,
-                "step_size": 0.001,
-                "min_notional": 10.0,
+                "tick_size": Decimal('0.01'),
+                "step_size": Decimal('0.001'),
+                "min_notional": Decimal('10.0'),
                 "supports_short": True
             },
             "BNB/USDT": {
-                "tick_size": 0.01,
-                "step_size": 0.001,
-                "min_notional": 10.0,
+                "tick_size": Decimal('0.01'),
+                "step_size": Decimal('0.001'),
+                "min_notional": Decimal('10.0'),
                 "supports_short": True
             },
             "ADA/USDT": {
-                "tick_size": 0.0001,
-                "step_size": 0.1,
-                "min_notional": 10.0,
+                "tick_size": Decimal('0.0001'),
+                "step_size": Decimal('0.1'),
+                "min_notional": Decimal('10.0'),
                 "supports_short": True
             },
             "SOL/USDT": {
-                "tick_size": 0.01,
-                "step_size": 0.001,
-                "min_notional": 10.0,
+                "tick_size": Decimal('0.01'),
+                "step_size": Decimal('0.001'),
+                "min_notional": Decimal('10.0'),
                 "supports_short": True
             }
         }
         
         return symbol_info_map.get(symbol, {
-            "tick_size": 0.01,
-            "step_size": 0.001,
-            "min_notional": 10.0,
+            "tick_size": Decimal('0.01'),
+            "step_size": Decimal('0.001'),
+            "min_notional": Decimal('10.0'),
             "supports_short": True
         })
     
-    def _round_to_tick(self, price: float, tick_size: float) -> float:
+    def _round_to_tick(self, price: Decimal, tick_size: Decimal) -> Decimal:
         """Round price to tick size.
         
         Args:
@@ -234,7 +241,7 @@ class StopModel(LoggerMixin):
         if tick_size <= 0:
             return price
         
-        return round(price / tick_size) * tick_size
+        return (price / tick_size).quantize(Decimal('1')) * tick_size
     
     def reset_fallback_logging(self):
         """Reset fallback logging for new cycle."""
@@ -250,6 +257,6 @@ class StopModel(LoggerMixin):
         return {
             "fallback_logged_count": len(self._fallback_logged),
             "fallback_symbols": list(self._fallback_logged),
-            "atr_multipliers": {"sl": self.atr_mult_sl, "tp": self.atr_mult_tp},
-            "fallback_percentages": {"sl": self.fallback_pct_sl, "tp": self.fallback_pct_tp}
+            "atr_multipliers": {"sl": float(self.atr_mult_sl), "tp": float(self.atr_mult_tp)},
+            "fallback_percentages": {"sl": float(self.fallback_pct_sl), "tp": float(self.fallback_pct_tp)}
         }

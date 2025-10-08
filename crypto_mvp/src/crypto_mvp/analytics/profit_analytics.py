@@ -701,7 +701,7 @@ class ProfitAnalytics(LoggerMixin):
                 max_loss = min(trade.get("pnl", 0.0) for trade in trades_to_use)
                 total_fees = sum(trade.get("fees", 0.0) for trade in trades_to_use)
                 total_trade_volume = sum(
-                    trade.get("quantity", 0.0) * trade.get("entry_price", 0.0) for trade in trades_to_use
+                    abs(trade.get("notional_value", 0.0)) for trade in trades_to_use
                 )
                 best_trade = max(trades_to_use, key=lambda x: x.get("pnl", 0.0))
                 worst_trade = min(trades_to_use, key=lambda x: x.get("pnl", 0.0))

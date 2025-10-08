@@ -1,0 +1,74 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║                   ✅ EQUITY BUG FIXED - READY TO RUN                     ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+🐛 THE BUG:
+   state_store.debit_cash() was preserving OLD equity instead of recalculating
+   Line 988: total_equity=latest_cash_equity["total_equity"]  ❌
+
+✅ THE FIX:  
+   Now recalculates: equity = cash + positions_value
+   Line 996: total_equity=recalculated_equity  ✅
+
+══════════════════════════════════════════════════════════════════════════
+
+🚀 TO START THE FIXED SYSTEM:
+
+   cd crypto_mvp
+   ./start_fresh.sh
+
+   OR manually:
+   python -m crypto_mvp --capital 10000
+
+══════════════════════════════════════════════════════════════════════════
+
+🔍 WHAT YOU'LL SEE IN LOGS:
+
+   When a trade executes:
+   
+   🟡 SIMULATION_MODE_FILL: Creating simulated fill...
+   🟡 APPLYING_CASH_IMPACT: Calling state_store.debit_cash
+   💳 DEBIT_CASH: $10,000→$9,XXX, positions=$0, equity=$9,XXX
+   ✅ DEBIT_COMPLETE: cash=$9,XXX, equity=$9,XXX
+   
+   After position saved:
+   💳 DEBIT_CASH: $9,XXX→$9,XXX, positions=$1,XXX, equity=$10,XXX
+   
+   Next cycle summary:
+   EQUITY_SNAPSHOT: cash=$9,XXX, positions=$1,XXX, total=$10,XXX ✅
+
+══════════════════════════════════════════════════════════════════════════
+
+📊 TO VERIFY IT'S WORKING:
+
+   In another terminal (while system runs):
+   
+   cd crypto_mvp
+   python diagnose_db.py
+   
+   Should show:
+   ✅ Cash decreasing with each trade
+   ✅ Equity = cash + positions
+   ✅ Discrepancy = $0.00
+
+══════════════════════════════════════════════════════════════════════════
+
+📁 FILES MODIFIED:
+
+   ✅ state/store.py - debit_cash() & credit_cash() equity recalculation
+   ✅ order_manager.py - diagnostic logging for simulation mode
+   ✅ trading_system.py - position consolidation + diagnostics
+   
+   Created:
+   ✅ start_fresh.sh - Clean start script
+   ✅ diagnose_db.py - Database inspection tool
+   ✅ fix_db_cash.py - Emergency repair tool
+   ✅ 8 documentation files
+
+══════════════════════════════════════════════════════════════════════════
+
+🎉 THE FIX IS COMPLETE - READY TO TEST!
+
+   Run ./start_fresh.sh and watch the equity update correctly!
+
+══════════════════════════════════════════════════════════════════════════

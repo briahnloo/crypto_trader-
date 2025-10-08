@@ -1,28 +1,36 @@
-# Crypto MVP - Profit Optimized Configuration
-# This configuration is optimized for maximum profit with controlled risk
+# Crypto MVP - AGGRESSIVE Profit Optimized Configuration
+# ⚡ OPTIMIZED FOR MAXIMUM PROFIT WITH CONTROLLED RISK ⚡
 
 # Trading Configuration
 trading:
   timeframe: "1h"
   symbols:
+    # Binance-compatible symbols (USDT quotes)
+    # ADA/USDT and BNB/USDT removed for Coinbase compatibility
     - "BTC/USDT"
     - "ETH/USDT"
-    - "ADA/USDT"
     - "SOL/USDT"
+    - "XRP/USDT"
+    - "DOGE/USDT"
   symbol_whitelist:
+    # Binance-compatible symbols (USDT quotes)
+    # ADA/USDT and BNB/USDT removed for Coinbase compatibility
     - "BTC/USDT"
     - "ETH/USDT"
+    - "SOL/USDT"
+    - "XRP/USDT"
+    - "DOGE/USDT"
   strategies:
     - "momentum"
     - "breakout"
     - "arbitrage"
     - "sentiment"
     - "whale_tracking"
-  max_open_trades: 5
-  min_trade_interval: 300  # 5 minutes in seconds
+  max_open_trades: 10  # AGGRESSIVE: Increased from 5 to 10 for more concurrent positions
+  min_trade_interval: 180  # AGGRESSIVE: 3 minutes (was 5) for faster trading
   trade_timeout: 3600  # 1 hour in seconds
-  min_confidence: 0.3  # Reduced from 0.4 to 0.3 for more opportunities
-  min_signal_score: 0.10  # Reduced from 0.15 to 0.10 for more trades
+  min_confidence: 0.15  # PRODUCTION-AGGRESSIVE: 0.15 for maximum opportunities
+  min_signal_score: 0.05  # AGGRESSIVE: 0.05 for more trades
   cycle_interval: 60  # Time between trading cycles in seconds (60 seconds)
   initial_capital: 10000  # Starting capital for trading
   live_mode: false  # Live trading mode (false for paper trading)
@@ -31,37 +39,37 @@ trading:
 
 # Risk Management Configuration
 risk:
-  max_drawdown: 0.10  # 10% maximum drawdown
+  max_drawdown: 0.20  # AGGRESSIVE: 20% maximum drawdown (was 10%)
   stop_loss: 0.02  # 2% stop loss
   take_profit: 0.04  # 4% take profit
   position_sizing:
     method: "risk_based"  # risk_based, fixed_risk, fixed_size, kelly_criterion
-    risk_per_trade_pct: 0.25  # 0.25% of equity per trade
-    max_notional_pct: 1.0  # 1.0% max notional of equity
-    risk_per_trade: 0.01  # 1% risk per trade (legacy)
-    max_position_size: 0.1  # 10% max position size (legacy)
-  daily_loss_limit: 0.05  # 5% daily loss limit (enhanced for safety)
-  max_drawdown_limit: 0.10  # 10% maximum drawdown limit
-  position_size_limit: 0.02  # 2% maximum position size limit
+    risk_per_trade_pct: 3.0  # AGGRESSIVE: 3% of equity per trade (was 0.25%)
+    max_notional_pct: 15.0  # AGGRESSIVE: 15% max notional of equity (was 1.0%)
+    risk_per_trade: 0.03  # AGGRESSIVE: 3% risk per trade (was 0.01%)
+    max_position_size: 0.20  # AGGRESSIVE: 20% max position size (was 0.1%)
+  daily_loss_limit: 0.10  # AGGRESSIVE: 10% daily loss limit (was 0.05%)
+  max_drawdown_limit: 0.20  # AGGRESSIVE: 20% maximum drawdown limit (was 0.10%)
+  position_size_limit: 0.20  # AGGRESSIVE: 20% maximum position size limit (was 0.02%)
   stop_loss_percentage: 0.03  # 3% automatic stop loss percentage
-  max_risk_per_trade: 0.02  # 2% maximum risk per trade
+  max_risk_per_trade: 0.05  # AGGRESSIVE: 5% maximum risk per trade (was 0.02%)
   max_correlation: 0.7  # Maximum correlation between positions
   volatility_adjustment: true
   dynamic_sizing: true
   
   # SL/TP derivation configuration
   sl_tp:
-    atr_mult_sl: 1.2          # ATR multiplier for stop loss
-    atr_mult_tp: 2.0          # ATR multiplier for take profit
-    fallback_pct_sl: 0.02     # 2% fallback stop loss
-    fallback_pct_tp: 0.04     # 4% fallback take profit
+    atr_mult_sl: 1.0          # AGGRESSIVE: Tighter stop (was 1.2) for more trades
+    atr_mult_tp: 2.5          # AGGRESSIVE: Wider target (was 2.0) for bigger wins
+    fallback_pct_sl: 0.015    # AGGRESSIVE: 1.5% fallback stop loss (was 2%)
+    fallback_pct_tp: 0.05     # AGGRESSIVE: 5% fallback take profit (was 4%)
     min_sl_abs: 0.001         # absolute guardrail for small-price assets
     min_tp_abs: 0.002         # absolute guardrail for small-price assets
   
   # Risk-Reward and fallback configuration
   enable_percent_fallback: true  # Enable percent-based SL/TP when ATR fails
-  rr_min: 1.30                   # Minimum risk-reward ratio for regular trades
-  rr_relax_for_pilot: 1.60       # Risk-reward ratio threshold for pilot trades
+  rr_min: 1.05                   # PRODUCTION-AGGRESSIVE: 1.05 RR minimum for maximum trades
+  rr_relax_for_pilot: 1.00       # PRODUCTION-AGGRESSIVE: 1.00 RR for pilots (breakeven+ acceptable)
   
   # OCO (One-Cancels-Other) order management
   oco_enabled: true              # Enable OCO orders after fills
@@ -75,8 +83,8 @@ risk:
   cooldown_after_sl_seconds: 180  # 5 minutes cooldown after stop-loss hit
   
   # Risk-per-trade sizing
-  risk_per_trade_pct: 0.10       # Risk 0.10% of equity per trade
-  allow_upsize: false            # Never increase position size beyond current default
+  risk_per_trade_pct: 2.0        # AGGRESSIVE: Risk 2.0% of equity per trade (was 0.10%)
+  allow_upsize: true             # AGGRESSIVE: Allow position sizing up (was false)
   
   # Exit logic configuration
   exits:
@@ -90,49 +98,49 @@ risk:
   
   # Entry gate configuration
   entry_gate:
-    enable_top_k: true          # NEW: Enable top-k selection instead of threshold
-    top_k_entries: 2            # NEW: Try top 2 candidates (or 3)
-    hard_floor_min: 0.60        # Increased from 0.40 for higher quality trades
-    gate_margin: 0.05           # Increased from 0.01 for more flexibility
-    effective_threshold: 0.65   # Keep as-is, used if enable_top_k=false
+    enable_top_k: true          # Enable top-k selection for best opportunities
+    top_k_entries: 4            # PRODUCTION-AGGRESSIVE: Top 4 candidates per cycle
+    hard_floor_min: 0.20        # PRODUCTION-AGGRESSIVE: 0.20 floor for MAXIMUM trades
+    gate_margin: 0.10           # 0.10 margin for flexibility
+    effective_threshold: 0.45   # PRODUCTION-AGGRESSIVE: 0.45 threshold for high trade frequency
     enable_vol_gate_easing: true  # Enable volatility-aware easing
-    vol_ease_k: 0.02           # Volatility easing coefficient
-    vol_ease_max: 0.5          # Maximum volatility easing
+    vol_ease_k: 0.05           # More easing in volatile markets
+    vol_ease_max: 0.8          # Max easing allowed
   
   # Exploration budget for forced pilots in quiet markets
   exploration:
     enabled: true
-    budget_pct_per_day: 0.03     # 3% of equity/day reserved for forced pilots
-    min_score: 0.30              # Allow marginal setups in quiet regimes
-    max_forced_per_day: 2        # Cap on forced trades per day
-    size_mult_vs_normal: 0.5     # Half normal risk size
-    tighter_stop_mult: 0.7       # 30% tighter stops than normal
+    budget_pct_per_day: 0.20     # AGGRESSIVE: 20% of equity/day (was 0.10%)
+    min_score: 0.01              # Very low for maximum discovery
+    max_forced_per_day: 5        # AGGRESSIVE: 5 trades per day (was 3)
+    size_mult_vs_normal: 0.7     # AGGRESSIVE: 70% of normal (was 0.5)
+    tighter_stop_mult: 0.8       # AGGRESSIVE: Less tight stops (was 0.7)
   
   # Risk-on override for volatile market conditions
   risk_on:
     enabled: true
     trigger:
-      atr_over_sma: 1.00         # ATR/ATR_SMA >= 1.00 triggers risk-on mode (lowered from 1.15)
+      atr_over_sma: 0.90         # AGGRESSIVE: Lower trigger - activate MORE often
       atr_period: 14             # ATR period
       atr_sma_period: 100        # ATR_SMA period
-    window_cycles: 3             # Override lasts for next 3 cycles
-    min_gate_floor: 0.35         # Lower than normal hard floor
-    risk_per_trade_pct: 0.02     # Bump from default (1%->2%)
+    window_cycles: 5             # Longer window for risk-on
+    min_gate_floor: 0.15         # PRODUCTION-AGGRESSIVE: 0.15 floor for risk-on mode
+    risk_per_trade_pct: 0.05     # 5% in risk-on mode
     allow_pyramids: true
-    max_adds: 2
-    add_triggers_r: [0.75, 1.5]  # Adds at +0.75R and +1.5R
+    max_adds: 2                  # PRODUCTION: 2 adds per position
+    add_triggers_r: [0.7, 1.4]   # PRODUCTION: Add at +0.7R and +1.4R
   
   # Risk-based sizing configuration
   sizing:
-    risk_per_trade_pct: 0.01   # 1% risk per trade (base, outside risk-on)
-    max_position_value_pct: 0.05  # 5% max position value
-    pilot_multiplier: 0.4      # Pilot trades use 40% of normal size
-    min_clip_$: 10.0           # Minimum slice size in dollars
-    per_symbol_cap_$: 500.0    # Per-symbol cap in dollars
-    session_cap_$: 0.3         # Session cap as fraction of equity (30%)
+    risk_per_trade_pct: 2.5    # PRODUCTION-AGGRESSIVE: 2.5% risk per trade ⚡
+    max_position_value_pct: 0.25  # PRODUCTION-AGGRESSIVE: 25% max position
+    pilot_multiplier: 0.6      # 60% of normal for pilots
+    min_clip_$: 50.0           # $50 minimum slice
+    per_symbol_cap_$: 3000.0   # PRODUCTION-AGGRESSIVE: $3,000 per symbol ⚡
+    session_cap_$: 0.75        # PRODUCTION-AGGRESSIVE: 75% of equity
   
   # Daily loss limit guardrail
-  daily_max_loss_pct: 0.02       # Halt entries if daily loss > 2%
+  daily_max_loss_pct: 0.10       # AGGRESSIVE: 10% halt (was 0.02%)
   
   # Preflight validation configuration
   min_stop_frac: 0.001           # Minimum stop distance as fraction of entry price (0.1%)
@@ -207,7 +215,8 @@ live_trading_safeguards:
 
 # Universe Configuration
 universe:
-  whitelist: [BTC/USDT, ETH/USDT, ADA/USDT, SOL/USDT]  # Only trade these liquid pairs
+  # Binance-compatible whitelist (USDT quotes) - ADA and BNB removed for Coinbase compatibility
+  whitelist: [BTC/USDT, ETH/USDT, SOL/USDT, XRP/USDT, DOGE/USDT]
 
 # Symbol-specific Configuration
 symbols:
@@ -215,10 +224,15 @@ symbols:
     allow_short: false
   ETH/USDT:
     allow_short: false
-
+  SOL/USDT:
+    allow_short: false
   ADA/USDT:
     allow_short: false
-  SOL/USDT:
+  BNB/USDT:
+    allow_short: false
+  XRP/USDT:
+    allow_short: false
+  DOGE/USDT:
     allow_short: false
 
 # Market Data Configuration
@@ -247,6 +261,9 @@ exchanges:
       - "ETH/USDT"
       - "ADA/USDT"
       - "SOL/USDT"
+      - "BNB/USDT"
+      - "XRP/USDT"
+      - "DOGE/USDT"
 
   coinbase:
     enabled: true
@@ -391,7 +408,7 @@ signals:
   generation:
     enabled: true
     update_interval: 60  # seconds
-    min_confidence: 0.4  # Reduced from 0.6
+    min_confidence: 0.3  # AGGRESSIVE: Reduced from 0.4
     max_signals_per_symbol: 3
 
   filtering:
@@ -410,32 +427,32 @@ signals:
   # Regime-specific thresholds
   regime:
     trend: 
-      min_score: 0.50  # Minimum score for trend regime
-      min_rr: 1.4      # Minimum risk-reward ratio for trend regime
+      min_score: 0.40  # AGGRESSIVE: Reduced from 0.50
+      min_rr: 1.2      # AGGRESSIVE: Reduced from 1.4
     range:
-      min_score: 0.48  # Minimum score for range regime
-      min_rr: 1.2      # Minimum risk-reward ratio for range regime
+      min_score: 0.35  # AGGRESSIVE: Reduced from 0.48
+      min_rr: 1.1      # AGGRESSIVE: Reduced from 1.2
 
 # Portfolio Management
 portfolio:
   # Portfolio constraints
   max_positions: 5
   min_position_weight: 0.02  # 2% minimum
-  max_position_weight: 0.25  # 25% maximum
-  target_volatility: 0.12  # 12% target volatility
-  risk_aversion: 1.5
-  correlation_penalty: 0.3
-  expected_return_boost: 1.1
+  max_position_weight: 0.30  # AGGRESSIVE: 30% maximum (was 0.25)
+  target_volatility: 0.15  # AGGRESSIVE: 15% target volatility (was 0.12)
+  risk_aversion: 1.2  # AGGRESSIVE: Lower aversion (was 1.5)
+  correlation_penalty: 0.2  # AGGRESSIVE: Lower penalty (was 0.3)
+  expected_return_boost: 1.2  # AGGRESSIVE: Higher boost (was 1.1)
   
   # Correlation and exposure guardrails
-  max_correlation: 0.6  # 60% maximum correlation between positions
-  max_portfolio_risk: 0.03  # 3% maximum portfolio risk budget
+  max_correlation: 0.7  # 70% maximum correlation between positions
+  max_portfolio_risk: 0.05  # AGGRESSIVE: 5% maximum portfolio risk budget (was 0.03%)
   
   # Sector caps (percentage of max positions allowed per sector)
   sector_caps:
-    "layer1": 0.4  # Max 40% of positions can be layer 1 blockchains
-    "defi": 0.3    # Max 30% of positions can be DeFi tokens
-    "meme": 0.2    # Max 20% of positions can be meme coins
+    "layer1": 0.6  # AGGRESSIVE: Max 60% of positions (was 40%)
+    "defi": 0.4    # AGGRESSIVE: Max 40% of positions (was 30%)
+    "meme": 0.3    # AGGRESSIVE: Max 30% of positions (was 20%)
     "stablecoin": 0.1  # Max 10% of positions can be stablecoins
   
   # Asset to sector mapping

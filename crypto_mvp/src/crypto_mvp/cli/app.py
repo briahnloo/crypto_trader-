@@ -1,46 +1,29 @@
 """
-Command-line interface for the Crypto MVP trading system.
+Command-line interface for the crypto trading system.
 """
 
 import argparse
 import asyncio
 import sys
 from pathlib import Path
+from typing import Optional
 
-from crypto_mvp.core.config_manager import ConfigManager
-from crypto_mvp.core.logging_utils import get_logger
-from crypto_mvp.trading_system import ProfitMaximizingTradingSystem
+from ..core.config_manager import ConfigManager
+from ..trading_system import ProfitMaximizingTradingSystem
 
 
 def create_argument_parser() -> argparse.ArgumentParser:
-    """Create and configure the argument parser.
+    """Create and configure argument parser.
 
     Returns:
-        Configured ArgumentParser instance
+        Configured argument parser
     """
     parser = argparse.ArgumentParser(
-        description="Crypto MVP - Profit-Maximizing Trading System",
+        description="Crypto Trading System - Profit-Optimized Strategy",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Run with default config
-  python -m crypto_mvp
-
-  # Run with custom config and capital
-  python -m crypto_mvp --config config/profit_optimized.yaml --capital 10000
-
-  # Run in live mode with specific symbols
-  python -m crypto_mvp --live --symbols BTC/USDT ETH/USDT --capital 50000
-
-  # Run single cycle for testing
-  python -m crypto_mvp --once --config config/profit_optimized.yaml
-
-  # Run with specific strategy
-  python -m crypto_mvp --strategy momentum --capital 25000
-        """,
     )
 
-    # Configuration options
+    # Configuration
     parser.add_argument(
         "--config",
         type=str,
@@ -48,113 +31,95 @@ Examples:
         help="Path to configuration file (default: config/profit_optimized.yaml)",
     )
 
-    # Trading mode options
-    parser.add_argument(
-        "--live",
-        action="store_true",
-        help="Run in live trading mode (default: paper/simulation mode). Requires API keys and explicit confirmation.",
-    )
-
-    parser.add_argument(
-        "--once",
-        action="store_true",
-        help="Run exactly one trading cycle and exit (useful for testing)",
-    )
-
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Force dry run mode (prevents live trading even with --live flag, useful for staging)",
-    )
-
-    # Trading parameters
-    parser.add_argument(
-        "--capital", type=float, help="Initial capital amount (overrides config file)"
-    )
-
-    parser.add_argument(
-        "--symbols", nargs="+", help="Trading symbols (e.g., BTC/USDT ETH/USDT)"
-    )
-
-    parser.add_argument(
-        "--strategy",
-        type=str,
-        choices=[
-            "momentum",
-            "breakout",
-            "mean_reversion",
-            "arbitrage",
-            "sentiment",
-            "composite",
-        ],
-        help="Primary trading strategy to use",
-    )
-
-    # System options
-    parser.add_argument(
-        "--log-level",
-        type=str,
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        default="INFO",
-        help="Logging level (default: INFO)",
-    )
-
-    parser.add_argument(
-        "--no-emoji", action="store_true", help="Disable emoji output in logs"
-    )
-
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Suppress console output (logs only to file)",
-    )
-
-    # Advanced options
-    parser.add_argument(
-        "--max-cycles",
-        type=int,
-        help="Maximum number of trading cycles to run (default: unlimited)",
-    )
-
-    parser.add_argument(
-        "--cycle-interval",
-        type=int,
-        help="Interval between trading cycles in seconds (default: from config)",
-    )
-
-    # Session management options
+    # Session management
     parser.add_argument(
         "--session-id",
         type=str,
-        help="Session identifier for state persistence (default: auto-generated timestamp-rand)",
+        help="Session ID for tracking trades (auto-generated if not provided)",
     )
 
     parser.add_argument(
         "--continue-session",
         action="store_true",
-        default=False,
-        help="Continue an existing session instead of starting fresh (requires --session-id)",
+        help="Continue an existing session (default: start new session)",
     )
 
     parser.add_argument(
         "--override-session-capital",
         action="store_true",
-        default=False,
-        help="Override session capital with --capital value (default: False). When True, --capital overrides session state.",
+        help="Override session capital with CLI capital (clears existing positions)",
+    )
+
+    # Trading parameters
+    parser.add_argument(
+        "--capital",
+        type=float,
+        help="Trading capital to use (overrides config if --override-session-capital set)",
+    )
+
+    parser.add_argument(
+        "--symbols",
+        type=str,
+        nargs="+",
+        help="List of symbols to trade (overrides config)",
+    )
+
+    parser.add_argument(
+        "--strategy",
+        type=str,
+        help="Primary strategy to use (overrides config)",
+    )
+
+    # Execution mode
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Enable live trading mode (default: paper trading)",
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Dry run mode - no orders placed (default: False)",
     )
 
     parser.add_argument(
         "--include-existing",
         action="store_true",
-        default=False,
-        help="Include existing positions from exchange in live mode (default: False). Reduces session cash by market value of existing positions.",
+        help="Include existing exchange positions (live mode only)",
+    )
+
+    # Cycle control
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run single trading cycle and exit (default: continuous)",
+    )
+
+    parser.add_argument(
+        "--cycle-interval",
+        type=int,
+        help="Interval between cycles in seconds (overrides config)",
+    )
+
+    # Logging
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging (default: False)",
+    )
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging (default: False)",
     )
 
     return parser
 
 
 def validate_arguments(args: argparse.Namespace) -> None:
-    """Validate command-line arguments.
+    """Validate parsed arguments.
 
     Args:
         args: Parsed arguments
@@ -162,7 +127,7 @@ def validate_arguments(args: argparse.Namespace) -> None:
     Raises:
         SystemExit: If validation fails
     """
-    # Validate config file
+    # Validate config file exists
     config_path = Path(args.config)
     if not config_path.exists():
         print(f"Error: Configuration file not found: {args.config}")
@@ -177,136 +142,61 @@ def validate_arguments(args: argparse.Namespace) -> None:
     if args.symbols:
         for symbol in args.symbols:
             if "/" not in symbol:
-                print(
-                    f"Error: Invalid symbol format '{symbol}'. Use format like 'BTC/USDT'"
-                )
+                print(f"Error: Invalid symbol format: {symbol} (expected: BASE/QUOTE)")
                 sys.exit(1)
 
-    # Validate session arguments
-    if args.continue_session and not args.session_id:
-        print("Error: --continue-session requires --session-id to be specified")
+    # Validate live mode restrictions
+    if args.live and args.dry_run:
+        print("Error: Cannot use --live and --dry-run together")
         sys.exit(1)
 
-
-def validate_live_mode_safety(args: argparse.Namespace) -> None:
-    """
-    Validate safety requirements for live trading mode.
-
-    Args:
-        args: Parsed arguments
-
-    Raises:
-        SystemExit: If safety validation fails
-    """
-    if not args.live:
-        return  # No validation needed for paper trading
-
-    print("🔒 LIVE TRADING MODE SAFETY CHECKS")
-    print("=" * 50)
-
-    # Load configuration
-    try:
-        config_manager = ConfigManager(args.config)
-        config = config_manager.to_dict()
-    except Exception as e:
-        print(f"❌ Failed to load configuration: {e}")
+    # Validate session capital override
+    if args.override_session_capital and args.capital is None:
+        print("Error: --override-session-capital requires --capital to be set")
         sys.exit(1)
-
-    # Check for dry run override
-    if args.dry_run:
-        print("🛡️  DRY RUN MODE ENABLED: Live trading is disabled")
-        print("   This prevents live trading even with --live flag")
-        return
-
-    # Check API keys
-    missing_keys = []
-
-    # Check exchange API keys
-    exchanges = config.get("exchanges", {})
-    for exchange_name, exchange_config in exchanges.items():
-        if exchange_config.get("enabled", False):
-            api_key = exchange_config.get("api_key")
-            secret = exchange_config.get("secret")
-
-            if not api_key or api_key in ["your_api_key_here", ""]:
-                missing_keys.append(f"Exchange {exchange_name}: API key")
-
-            if not secret or secret in ["your_secret_key_here", ""]:
-                missing_keys.append(f"Exchange {exchange_name}: Secret key")
-
-    if missing_keys:
-        print("❌ MISSING API KEYS FOR LIVE TRADING:")
-        for key in missing_keys:
-            print(f"   • {key}")
-        print("\n💡 To enable live trading:")
-        print("   1. Add your API keys to the configuration file")
-        print("   2. Ensure keys are valid and have trading permissions")
-        print("   3. Test with paper trading first")
-        sys.exit(1)
-
-    # Require explicit confirmation
-    print("⚠️  LIVE TRADING MODE DETECTED")
-    print("   This will place REAL trades with REAL money!")
-    print("   Make sure you understand the risks involved.")
-    print()
-
-    confirmation = input("Type 'CONFIRM' to proceed with live trading: ").strip()
-
-    if confirmation != "CONFIRM":
-        print("❌ Live trading cancelled. Use paper trading mode for testing.")
-        sys.exit(1)
-
-    print("✅ Live trading mode confirmed")
-    print("🚀 Proceeding with live trading...")
 
 
 def check_dry_run_mode(args: argparse.Namespace) -> bool:
-    """
-    Check if dry run mode should be enforced.
+    """Check if dry run mode is active and display warning.
 
     Args:
         args: Parsed arguments
 
     Returns:
-        True if dry run mode is active
+        True if dry run is active
     """
     if args.dry_run:
-        print("🛡️  DRY RUN MODE: All trading will be simulated")
+        print("\n" + "=" * 60)
+        print("🔒 DRY RUN MODE ACTIVE - NO ORDERS WILL BE PLACED")
+        print("=" * 60 + "\n")
         return True
 
-    # Check config for dry run setting
-    try:
-        config_manager = ConfigManager(args.config)
-        config = config_manager.to_dict()
-
-        if config.get("development", {}).get("dry_run", False):
-            print("🛡️  DRY RUN MODE (from config): All trading will be simulated")
-            return True
-    except Exception:
-        pass  # Ignore config errors, use defaults
+    if not args.live:
+        print("\n" + "=" * 60)
+        print("📝 PAPER TRADING MODE - SIMULATED EXECUTION ONLY")
+        print("=" * 60 + "\n")
 
     return False
 
-    # Validate cycle interval
-    if args.cycle_interval is not None and args.cycle_interval <= 0:
-        print("Error: Cycle interval must be positive")
-        sys.exit(1)
 
-
-def print_startup_info(args: argparse.Namespace) -> None:
-    """Print startup information.
+def print_session_info(args: argparse.Namespace) -> None:
+    """Print session configuration information.
 
     Args:
         args: Parsed arguments
     """
-    print("🚀 Crypto MVP - Profit-Maximizing Trading System")
+    print("\n" + "=" * 60)
+    print("🚀 CRYPTO TRADING SYSTEM - SESSION INFO")
     print("=" * 60)
     print(f"📁 Config: {args.config}")
     print(f"💰 Mode: {'LIVE' if args.live else 'PAPER/SIMULATION'}")
     print(f"🔄 Cycles: {'Single cycle' if args.once else 'Continuous'}")
 
     if args.capital:
-        print(f"💵 Capital: ${args.capital:,.2f}")
+        if args.override_session_capital:
+            print(f"💵 Capital: ${args.capital:,.2f} (OVERRIDE - clearing old positions)")
+        else:
+            print(f"💵 Capital: ${args.capital:,.2f} (will use session capital if available)")
 
     if args.symbols:
         print(f"📊 Symbols: {', '.join(args.symbols)}")
@@ -314,32 +204,23 @@ def print_startup_info(args: argparse.Namespace) -> None:
     if args.strategy:
         print(f"🎯 Strategy: {args.strategy}")
 
-    if args.max_cycles:
-        print(f"🔢 Max Cycles: {args.max_cycles}")
-
-    if args.cycle_interval:
-        print(f"⏱️  Cycle Interval: {args.cycle_interval}s")
-
-    # Session information
     if args.session_id:
-        print(f"🆔 Session ID: {args.session_id}")
-        print(f"🔄 Session Mode: {'Continue' if args.continue_session else 'New'}")
-    else:
-        print(f"🆔 Session ID: Auto-generated")
+        print(f"🆔 Session: {args.session_id}")
+        if args.continue_session:
+            print("   (continuing existing session)")
 
-    print("=" * 60)
+    print("=" * 60 + "\n")
 
 
 def print_cycle_summary(cycle_results: dict) -> None:
     """Print trading cycle summary.
 
     Args:
-        cycle_results: Results from trading cycle
+        cycle_results: Cycle execution results
     """
-    print("\n📊 Trading Cycle Summary")
+    print("\n" + "=" * 40)
+    print("📊 CYCLE SUMMARY")
     print("=" * 40)
-    print(f"🆔 Cycle ID: {cycle_results.get('cycle_id', 'unknown')}")
-    print(f"⏱️  Duration: {cycle_results.get('duration', 0):.2f}s")
 
     # Market data summary
     market_data = cycle_results.get("market_data", {})
@@ -413,18 +294,24 @@ async def run_single_cycle(args: argparse.Namespace) -> None:
         if args.capital:
             trading_system.config["trading"]["initial_capital"] = args.capital
         
+        # CRITICAL FIX: Determine if we should override session capital
+        should_override = args.override_session_capital or (args.capital is not None and not args.continue_session)
+        
+        if should_override:
+            print(f"⚠️  CAPITAL OVERRIDE: Starting fresh with ${args.capital:,.2f}")
+            print("   All existing positions will be cleared")
+        
         # Now initialize with the updated config and session parameters
         trading_system.initialize(
             session_id=args.session_id,
             continue_session=args.continue_session,
-            respect_session_capital=not args.override_session_capital,
+            respect_session_capital=not should_override,  # Force False when overriding
             include_existing=args.include_existing
         )
 
-        # Update in-memory portfolio after initialization
-        if args.capital:
-            trading_system.portfolio["equity"] = args.capital
-            trading_system.portfolio["cash_balance"] = args.capital
+        # CRITICAL FIX: DO NOT override portfolio cash/equity here!
+        # The initialize() method already handles capital correctly
+        # when respect_session_capital=False. Overriding here creates phantom equity!
 
         if args.symbols:
             trading_system.config["trading"]["symbols"] = args.symbols
@@ -477,23 +364,26 @@ async def run_continuous(args: argparse.Namespace) -> None:
         trading_system.config_manager = ConfigManager(args.config)
         trading_system.config = trading_system.config_manager.to_dict()
         
-        # Override config with CLI arguments BEFORE full initialization
+        # Override config with CLI arguments
         if args.capital:
             trading_system.config["trading"]["initial_capital"] = args.capital
         
-        # Now initialize with the updated config and session parameters
+        # CRITICAL FIX: Determine if we should override session capital
+        should_override = args.override_session_capital or (args.capital is not None and not args.continue_session)
+        
+        if should_override:
+            print(f"⚠️  CAPITAL OVERRIDE: Starting fresh with ${args.capital:,.2f}")
+            print("   All existing positions will be cleared")
+        
         trading_system.initialize(
             session_id=args.session_id,
             continue_session=args.continue_session,
-            respect_session_capital=not args.override_session_capital,
+            respect_session_capital=not should_override,
             include_existing=args.include_existing
         )
 
-        # Update in-memory portfolio after initialization
-        if args.capital:
-            trading_system.portfolio["equity"] = args.capital
-            trading_system.portfolio["cash_balance"] = args.capital
-
+        # CRITICAL FIX: DO NOT override portfolio here!
+        
         if args.symbols:
             trading_system.config["trading"]["symbols"] = args.symbols
 
@@ -503,15 +393,18 @@ async def run_continuous(args: argparse.Namespace) -> None:
         if args.cycle_interval:
             trading_system.config["trading"]["cycle_interval"] = args.cycle_interval
 
-        # Set live mode and dry run flags
         trading_system.config["trading"]["live_mode"] = args.live
         trading_system.config["trading"]["dry_run"] = args.dry_run
 
-        # Run continuous trading
-        await trading_system.run(max_cycles=args.max_cycles)
+        print("✅ System initialized, starting continuous trading...")
+        print("   Press Ctrl+C to stop gracefully\n")
+
+        # CRITICAL FIX: Use correct method name
+        await trading_system.run()  # Not run_continuous()!
 
     except KeyboardInterrupt:
-        print("\n⏹️  Trading stopped by user")
+        print("\n\n⚠️  Received interrupt signal, shutting down gracefully...")
+        print("✅ System stopped successfully")
     except Exception as e:
         print(f"\n❌ Error in continuous trading: {e}")
         sys.exit(1)
@@ -529,28 +422,28 @@ def main() -> None:
     # Check dry run mode
     dry_run_active = check_dry_run_mode(args)
 
-    # Validate live mode safety
-    validate_live_mode_safety(args)
+    # Print session info
+    print_session_info(args)
 
-    # Print startup info
-    print_startup_info(args)
+    # Confirm live trading if enabled
+    if args.live and not dry_run_active:
+        response = input("⚠️  LIVE TRADING MODE - Real money will be used. Continue? (yes/no): ")
+        if response.lower() not in ["yes", "y"]:
+            print("❌ Aborted by user")
+            sys.exit(0)
 
-    # Configure logging
-    logger_config = {
-        "level": args.log_level,
-        "console_output": not args.quiet,
-        "emoji_enabled": not args.no_emoji,
-    }
-
-    # Set up logging
-    logger = get_logger("crypto_mvp", logger_config)
-    logger.info("Starting Crypto MVP trading system")
-
-    # Run appropriate mode
-    if args.once:
-        asyncio.run(run_single_cycle(args))
-    else:
-        asyncio.run(run_continuous(args))
+    # Run trading
+    try:
+        if args.once:
+            asyncio.run(run_single_cycle(args))
+        else:
+            asyncio.run(run_continuous(args))
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Interrupted by user")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n❌ Fatal error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -6,14 +6,20 @@ import random
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional, List, Dict
-from decimal import Decimal
+from typing import Any, Optional, List, Dict, Union
+from decimal import Decimal, getcontext
 
 from ..core.logging_utils import LoggerMixin
 from ..core.utils import get_mark_price, get_mark_price_with_provenance, validate_mark_price
+from ..core.decimal_money import to_decimal
 from ..risk.risk_manager import ExitAction
 from ..connectors import BaseConnector, FeeInfo
 from .order_builder import OrderBuilder
+from ..analytics.pnl_logger import get_pnl_logger
+from .fee_slippage import FeeSlippageCalculator
+
+# Set decimal precision for financial calculations
+getcontext().prec = 28
 
 
 class OrderType(Enum):
@@ -74,21 +80,36 @@ class Order:
 
 @dataclass
 class Fill:
-    """Fill data structure."""
+    """Fill data structure with realistic fees and slippage."""
 
     order_id: str
     symbol: str
     side: OrderSide
     quantity: float
-    price: float
+    price: float  # Effective fill price (including slippage)
     fees: float
     timestamp: datetime
     strategy: str = ""
     metadata: dict[str, Any] = None
+    
+    # Fee and slippage details
+    mark_price: Optional[float] = None  # Mark price before slippage
+    slippage_bps: Optional[float] = None  # Slippage in basis points
+    slippage_cost: Optional[float] = None  # Dollar cost of slippage
+    fee_bps: Optional[float] = None  # Fee rate in basis points
+    is_maker: bool = False  # Whether this was a maker fill
 
     def __post_init__(self):
         if self.metadata is None:
             self.metadata = {}
+    
+    def get_total_cost(self) -> float:
+        """Get total cost including slippage and fees."""
+        notional = self.quantity * self.price
+        if self.side == OrderSide.BUY:
+            return notional + self.fees
+        else:
+            return notional - self.fees
 
 
 class OrderManager(LoggerMixin):
@@ -127,11 +148,16 @@ class OrderManager(LoggerMixin):
                 self.stop_model = None
 
         # Fee configuration (in basis points)
-        self.maker_fee_bps = self.config.get("maker_fee_bps", 10)
+        self.maker_fee_bps = self.config.get("maker_fee_bps", 10)  # 10 bps = 0.1%
         
         # Cycle tracking
-        self.cycle_id = None  # 0.1%
-        self.taker_fee_bps = self.config.get("taker_fee_bps", 20)  # 0.2%
+        self.cycle_id = None
+        self.taker_fee_bps = self.config.get("taker_fee_bps", 20)  # 20 bps = 0.2%
+        
+        # Initialize fee/slippage calculator
+        venue = self.config.get("venue", "default")
+        slippage_config = self.config.get("slippage", {})
+        self.fee_slip_calculator = FeeSlippageCalculator(venue, slippage_config)
         
         # Connector for fee information
         self.connector: Optional[BaseConnector] = None
@@ -146,7 +172,7 @@ class OrderManager(LoggerMixin):
         # Safety rails
         self.live_mode = self.config.get("live_mode", False)
         self.api_keys_validated = False
-        self.slippage_bps = self.config.get("slippage_bps", 5)  # 0.05% slippage
+        self.slippage_bps = self.config.get("slippage_bps", 5)  # Legacy: 0.05% slippage
         
         # Session management
         # session_id is set via constructor or set_session_id method
@@ -469,7 +495,8 @@ class OrderManager(LoggerMixin):
         gate_info: dict[str, Any] = None,
         stop_price: Optional[float] = None,
         tp_price: Optional[float] = None,
-        account_mode: str = "spot"
+        account_mode: str = "spot",
+        metadata: Optional[dict[str, Any]] = None
     ) -> dict[str, Any]:
         """Execute order by slices with caps and limits.
         
@@ -485,6 +512,7 @@ class OrderManager(LoggerMixin):
             stop_price: Stop loss price for preflight validation
             tp_price: Take profit price for preflight validation
             account_mode: Account mode ("spot" or "margin")
+            metadata: Order metadata with intent tagging
             
         Returns:
             Dictionary with execution results
@@ -1024,7 +1052,7 @@ class OrderManager(LoggerMixin):
         return self._get_default_symbol_info(symbol)
 
     def apply_fill_cash_impact(self, fill: Fill) -> bool:
-        """Apply cash impact of a fill to the session.
+        """Apply cash impact of a fill to the session with proper fee deduction.
         
         Args:
             fill: Fill information
@@ -1040,25 +1068,37 @@ class OrderManager(LoggerMixin):
             # No fill, no cash impact
             return True
         
-        notional = fill.quantity * fill.price
+        # Use Decimal arithmetic for precise calculations
+        qty_decimal = Decimal(str(fill.quantity))
+        price_decimal = Decimal(str(fill.price))
+        fees_decimal = Decimal(str(fill.fees))
+        
+        # Calculate notional value with Decimal precision
+        notional_decimal = qty_decimal * price_decimal
+        
+        # Quantize to currency precision (2 decimal places for USDT)
+        from decimal import ROUND_HALF_UP
+        notional_quantized = notional_decimal.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
         
         if not self.session_id:
             raise RuntimeError("session_id not set - cannot process cash operations without valid session")
 
         if fill.side == OrderSide.BUY:
-            # Debit cash for buy orders
-            success = self.state_store.debit_cash(self.session_id, notional, fill.fees)
+            # Debit cash for buy orders (notional + fees)
+            total_cost = notional_quantized + fees_decimal
+            success = self.state_store.debit_cash(self.session_id, float(total_cost), float(fees_decimal))
             if not success:
                 self.logger.error(f"Failed to debit cash for buy order: {fill.order_id}")
                 return False
         else:
-            # Credit cash for sell orders
-            success = self.state_store.credit_cash(self.session_id, notional, fill.fees)
+            # Credit cash for sell orders (notional - fees)
+            net_proceeds = notional_quantized - fees_decimal
+            success = self.state_store.credit_cash(self.session_id, float(net_proceeds), float(fees_decimal))
             if not success:
                 self.logger.error(f"Failed to credit cash for sell order: {fill.order_id}")
                 return False
         
-        self.logger.debug(f"Applied cash impact for {fill.side.value} order {fill.order_id}: ${notional:.2f}")
+        self.logger.debug(f"Applied cash impact for {fill.side.value} order {fill.order_id}: notional=${float(notional_quantized):.2f}, fees=${float(fees_decimal):.2f}")
         return True
 
     def create_order(
@@ -1234,6 +1274,7 @@ class OrderManager(LoggerMixin):
         
         # In simulation mode, immediately execute the order
         if self.simulate:
+            self.logger.info(f"🟡🟡🟡 SIMULATION_MODE_FILL: Creating simulated fill for {order.symbol} {order.side.value}")
             try:
                 # Get current market price for execution
                 if self.data_engine:
@@ -1261,13 +1302,13 @@ class OrderManager(LoggerMixin):
 
     def calculate_fees(
         self,
-        quantity: float,
-        price: float,
+        quantity: Union[float, Decimal],
+        price: Union[float, Decimal],
         order_type: OrderType,
         symbol: str,
         is_maker: bool = False,
     ) -> float:
-        """Calculate trading fees using connector information.
+        """Calculate trading fees using connector information with Decimal precision.
 
         Args:
             quantity: Order quantity
@@ -1277,8 +1318,12 @@ class OrderManager(LoggerMixin):
             is_maker: Whether this is a maker order
 
         Returns:
-            Calculated fees
+            Calculated fees (quantized to currency precision)
         """
+        # Convert inputs to Decimal for precise calculation
+        qty_decimal = Decimal(str(quantity))
+        price_decimal = Decimal(str(price))
+        
         # Try to get fee information from connector first
         if self.connector:
             try:
@@ -1297,31 +1342,39 @@ class OrderManager(LoggerMixin):
             # Use default fee configuration
             fee_bps = self.maker_fee_bps if is_maker or order_type == OrderType.LIMIT else self.taker_fee_bps
 
-        # Calculate fees
-        notional_value = quantity * price
-        fees = notional_value * (fee_bps / 10000)  # Convert bps to decimal
-
-        return fees
+        # Calculate fees using Decimal arithmetic: notional * taker_bps * D('0.0001')
+        notional_decimal = qty_decimal * price_decimal
+        fee_bps_decimal = Decimal(str(fee_bps))
+        fee_multiplier = Decimal('0.0001')  # Convert bps to decimal (1 bps = 0.0001)
+        
+        fees_decimal = notional_decimal * fee_bps_decimal * fee_multiplier
+        
+        # Quantize to currency precision (2 decimal places for USDT)
+        from decimal import ROUND_HALF_UP
+        fees_quantized = fees_decimal.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        
+        return float(fees_quantized)
 
     def simulate_fill(
         self,
         order: Order,
         current_price: float,
         market_data: Optional[dict[str, Any]] = None,
-    ) -> tuple[bool, float, float]:
-        """Simulate order fill for paper trading.
+    ) -> tuple[bool, float, float, Dict[str, Any]]:
+        """Simulate order fill for paper trading with realistic fees and slippage.
 
         Args:
             order: Order to simulate
-            current_price: Current market price
+            current_price: Current market price (mark price)
             market_data: Additional market data (optional)
 
         Returns:
-            Tuple of (filled, fill_price, fees)
+            Tuple of (filled, fill_price, fees, fill_details)
+            where fill_details contains: mark_price, slippage_bps, slippage_cost, fee_bps, is_maker
         """
         if not self.simulate and not self.sandbox_mode:
             # Real trading mode - would make actual exchange calls
-            return False, 0.0, 0.0
+            return False, 0.0, 0.0, {}
 
         # Extract market data
         volatility = (
@@ -1344,20 +1397,36 @@ class OrderManager(LoggerMixin):
         filled = random.random() < fill_probability
 
         if not filled:
-            return False, 0.0, 0.0
+            return False, 0.0, 0.0, {}
 
-        # Calculate fill price with slippage
-        fill_price = self._calculate_fill_price(order, current_price, volatility)
-
-        # Calculate fees
-        is_maker = order.order_type == OrderType.LIMIT and self._is_maker_order(
-            order, current_price
+        # Determine if maker or taker
+        is_market_order = order.order_type == OrderType.MARKET
+        is_maker = order.order_type == OrderType.LIMIT and self._is_maker_order(order, current_price)
+        
+        # Use fee/slippage calculator for realistic costs
+        fill_costs = self.fee_slip_calculator.calculate_fill_with_costs(
+            symbol=order.symbol,
+            side=order.side.value,
+            quantity=to_decimal(order.quantity),
+            mark_price=to_decimal(current_price),
+            is_market_order=is_market_order,
+            is_maker=is_maker
         )
-        fees = self.calculate_fees(
-            order.quantity, fill_price, order.order_type, order.symbol, is_maker
-        )
+        
+        # Extract results
+        effective_fill_price = float(fill_costs["effective_fill_price"])
+        fees = float(fill_costs["fees"])
+        
+        # Build fill details for storage
+        fill_details = {
+            "mark_price": float(fill_costs["mark_price"]),
+            "slippage_bps": float(fill_costs["slippage_bps"]),
+            "slippage_cost": float(fill_costs["slippage_cost"]),
+            "fee_bps": float(self.taker_fee_bps if not is_maker else self.maker_fee_bps),
+            "is_maker": is_maker
+        }
 
-        return True, fill_price, fees
+        return True, effective_fill_price, fees, fill_details
 
     def _calculate_fill_probability(
         self, order: Order, current_price: float, volatility: float, liquidity: float
@@ -1492,7 +1561,7 @@ class OrderManager(LoggerMixin):
         current_price: float,
         market_data: Optional[dict[str, Any]] = None,
     ) -> Fill:
-        """Execute an order and return fill information.
+        """Execute an order and return fill information with proper fee calculation.
 
         Args:
             order: Order to execute
@@ -1502,28 +1571,51 @@ class OrderManager(LoggerMixin):
         Returns:
             Fill information
         """
-        # Simulate fill
-        filled, fill_price, fees = self.simulate_fill(order, current_price, market_data)
+        # Simulate fill with realistic fees and slippage
+        filled, fill_price, fees, fill_details = self.simulate_fill(order, current_price, market_data)
 
         if filled:
-            # Create fill
+            # Ensure fees are properly calculated with Decimal precision
+            if fees <= 0:
+                # Recalculate fees if not properly set
+                is_maker = order.order_type == OrderType.LIMIT and self._is_maker_order(order, current_price)
+                fees = self.calculate_fees(order.quantity, fill_price, order.order_type, order.symbol, is_maker)
+            
+            # Create fill with slippage details
             fill = Fill(
                 order_id=order.id,
                 symbol=order.symbol,
                 side=order.side,
                 quantity=order.quantity,
-                price=fill_price,
+                price=fill_price,  # Effective fill price (after slippage)
                 fees=fees,
                 timestamp=datetime.now(),
                 strategy=order.strategy,
                 metadata=order.metadata.copy(),
+                # Slippage and fee details
+                mark_price=fill_details.get("mark_price", current_price),
+                slippage_bps=fill_details.get("slippage_bps", 0.0),
+                slippage_cost=fill_details.get("slippage_cost", 0.0),
+                fee_bps=fill_details.get("fee_bps", self.taker_fee_bps),
+                is_maker=fill_details.get("is_maker", False)
+            )
+            
+            # Log fill with costs
+            self.logger.info(
+                f"FILL: {fill.symbol} {fill.side.value} {fill.quantity:.6f} @ "
+                f"mark=${fill.mark_price:.4f} → fill=${fill.price:.4f} "
+                f"(slip={fill.slippage_bps:.2f}bps/${fill.slippage_cost:.4f}), "
+                f"fees=${fill.fees:.4f} ({fill.fee_bps:.1f}bps, {'maker' if fill.is_maker else 'taker'})"
             )
 
-            # Apply cash impact to session
+            # Apply cash impact to session (includes fee deduction)
+            self.logger.info(f"🟡 APPLYING_CASH_IMPACT: Calling state_store.debit_cash/credit_cash directly (bypassing _update_portfolio_with_trade)")
             cash_success = self.apply_fill_cash_impact(fill)
             if not cash_success:
                 self.logger.error(f"Failed to apply cash impact for order {order.id}")
                 # Continue anyway - the fill happened, just log the error
+            else:
+                self.logger.info(f"✅ CASH_IMPACT_APPLIED: Cash should now be debited/credited")
 
             # Update order status
             order.status = OrderStatus.FILLED
@@ -1535,8 +1627,56 @@ class OrderManager(LoggerMixin):
             self.fills.append(fill)
 
             self.logger.info(
-                f"Order {order.id} filled: {order.quantity} {order.symbol} @ {fill_price:.4f}"
+                f"Order {order.id} filled: {order.quantity} {order.symbol} @ {fill_price:.4f} fees=${fees:.4f}"
             )
+            
+            # Log comprehensive P&L for this trade
+            try:
+                pnl_logger = get_pnl_logger()
+                
+                # Determine trade type and realized P&L
+                trade_type = "ENTRY"
+                realized_pnl = 0.0
+                entry_price = None
+                stop_price = None
+                
+                # Check metadata for trade context
+                metadata = order.metadata or {}
+                if metadata.get("order_intent") == "close":
+                    trade_type = "EXIT"
+                elif metadata.get("is_add"):
+                    trade_type = "ADD"
+                
+                # Get entry/stop prices from metadata if available
+                entry_price = metadata.get("entry_price")
+                stop_price = metadata.get("stop_price")
+                
+                # Calculate notional
+                notional = order.quantity * fill_price
+                
+                # Get exit reason if available
+                reason = metadata.get("exit_reason", metadata.get("reason", ""))
+                
+                pnl_logger.log_trade_execution(
+                    symbol=order.symbol,
+                    side=order.side.value,
+                    quantity=order.quantity,
+                    fill_price=fill_price,
+                    notional=notional,
+                    fee=fees,
+                    entry_price=entry_price,
+                    stop_price=stop_price,
+                    realized_pnl=realized_pnl,
+                    trade_type=trade_type,
+                    reason=reason,
+                    metadata={
+                        "strategy": order.strategy,
+                        "slippage_bps": fill.slippage_bps,
+                        "is_maker": fill.is_maker
+                    }
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to log P&L for trade: {e}")
 
             return fill
         else:
@@ -1799,9 +1939,15 @@ class OrderManager(LoggerMixin):
         Returns:
             List of TP ladder orders created
         """
+        from decimal import Decimal
+        
         tp_orders = []
         
         try:
+            # Normalize inputs to Decimal at function entry
+            position_size_dec = Decimal(str(position_size))
+            avg_cost_dec = Decimal(str(avg_cost))
+            current_price_dec = Decimal(str(current_price))
             # Get TP ladder configuration
             exit_cfg = config.get("risk", {}).get("exits", {})
             tp_ladders = exit_cfg.get("tp_ladders", [])
@@ -1815,21 +1961,23 @@ class OrderManager(LoggerMixin):
                 return tp_orders
             
             # Skip if position size is below minimum
-            if abs(position_size) <= min_qty:
+            if abs(position_size_dec) <= Decimal(str(min_qty)):
                 self.logger.debug(f"Position size {position_size} below min_qty {min_qty}, skipping TP ladders")
                 return tp_orders
             
             # Determine position side
-            is_long = position_size > 0
+            is_long = position_size_dec > 0
             
             # Get 1R (risk unit) - try to get from strategy first, fallback to ATR
-            one_r = self._get_risk_unit(symbol, avg_cost, risk_manager)
+            one_r_raw = self._get_risk_unit(symbol, avg_cost, risk_manager)
             
-            if one_r <= 0:
+            if one_r_raw <= 0:
                 self.logger.warning(f"Could not determine 1R for {symbol}, skipping TP ladders")
                 return tp_orders
             
-            self.logger.info(f"Creating TP ladders for {symbol}: position={position_size:.6f}, avg_cost={avg_cost:.6f}, 1R={one_r:.6f}")
+            one_r_dec = Decimal(str(one_r_raw))
+            
+            self.logger.info(f"Creating TP ladders for {symbol}: position={float(position_size_dec):.6f}, avg_cost={float(avg_cost_dec):.6f}, 1R={float(one_r_dec):.6f}")
             
             # Create TP ladder orders
             for ladder in tp_ladders:
@@ -1851,44 +1999,52 @@ class OrderManager(LoggerMixin):
                         self.logger.warning(f"Skipping TP ladder due to invalid pct value: {pct_raw}")
                         continue
                     
-                    # Calculate target price based on format
+                    # Calculate target price based on format (use Decimal throughout)
                     if profit_pct_raw is not None:
                         # New percentage-based format: profit_pct is percentage profit from entry
-                        profit_pct = self._coerce_to_float(profit_pct_raw, "profit_pct", 1.0)
-                        if profit_pct is None:
+                        profit_pct_float = self._coerce_to_float(profit_pct_raw, "profit_pct", 1.0)
+                        if profit_pct_float is None:
                             self.logger.warning(f"Skipping TP ladder due to invalid profit_pct value: {profit_pct_raw}")
                             continue
                         
+                        profit_pct_dec = Decimal(str(profit_pct_float))
+                        hundred = Decimal("100")
+                        one = Decimal("1")
+                        
                         if is_long:
                             # LONG: target = avg_cost * (1 + profit_pct/100)
-                            target_price = avg_cost * (1 + profit_pct / 100)
+                            target_price_dec = avg_cost_dec * (one + profit_pct_dec / hundred)
                             side = OrderSide.SELL
                         else:
                             # SHORT: target = avg_cost * (1 - profit_pct/100)
-                            target_price = avg_cost * (1 - profit_pct / 100)
+                            target_price_dec = avg_cost_dec * (one - profit_pct_dec / hundred)
                             side = OrderSide.BUY
                     else:
                         # Legacy R-multiple format
-                        r_mult = self._coerce_to_float(r_mult_raw, "r_mult", 1.0)
-                        if r_mult is None:
+                        r_mult_float = self._coerce_to_float(r_mult_raw, "r_mult", 1.0)
+                        if r_mult_float is None:
                             self.logger.warning(f"Skipping TP ladder due to invalid r_mult value: {r_mult_raw}")
                             continue
                         
+                        r_mult_dec = Decimal(str(r_mult_float))
+                        
                         if is_long:
                             # LONG: target = avg_cost + r_mult * 1R
-                            target_price = avg_cost + (r_mult * one_r)
+                            target_price_dec = avg_cost_dec + (r_mult_dec * one_r_dec)
                             side = OrderSide.SELL
                         else:
                             # SHORT: target = avg_cost - r_mult * 1R
-                            target_price = avg_cost - (r_mult * one_r)
+                            target_price_dec = avg_cost_dec - (r_mult_dec * one_r_dec)
                             side = OrderSide.BUY
                     
-                    # Round to tick size
+                    # Round to tick size (convert to float at boundary)
                     tick_size = self._get_tick_size(symbol)
-                    rounded_target = self._round_to_tick(target_price, tick_size)
+                    rounded_target = self._round_to_tick(float(target_price_dec), tick_size)
                     
-                    # Calculate quantity for this ladder
-                    ladder_qty = abs(position_size) * pct
+                    # Calculate quantity for this ladder (use Decimal)
+                    pct_dec = Decimal(str(pct))
+                    ladder_qty_dec = abs(position_size_dec) * pct_dec
+                    ladder_qty = float(ladder_qty_dec)
                     
                     # Skip if quantity is too small
                     if ladder_qty <= min_qty:
@@ -1918,25 +2074,27 @@ class OrderManager(LoggerMixin):
                         # Format logging based on whether we used percentage or R-multiple
                         if profit_pct_raw is not None:
                             self.logger.info(
-                                f"Created TP ladder order {order.id}: {side.value} {ladder_qty:.6f} {symbol} @ {rounded_target:.6f} (+{profit_pct:.1f}%, {pct*100:.0f}%)"
+                                f"Created TP ladder order {order.id}: {side.value} {ladder_qty:.6f} {symbol} @ {rounded_target:.6f} (+{profit_pct_float:.1f}%, {pct*100:.0f}%)"
                             )
                         else:
                             self.logger.info(
-                                f"Created TP ladder order {order.id}: {side.value} {ladder_qty:.6f} {symbol} @ {rounded_target:.6f} ({r_mult}R, {pct*100:.0f}%)"
+                                f"Created TP ladder order {order.id}: {side.value} {ladder_qty:.6f} {symbol} @ {rounded_target:.6f} ({r_mult_float}R, {pct*100:.0f}%)"
                             )
                     else:
                         # Format error logging based on format used
                         if profit_pct_raw is not None:
-                            self.logger.warning(f"Failed to create TP ladder order for {symbol} at +{profit_pct:.1f}%: {error_reason}")
+                            self.logger.warning(f"Failed to create TP ladder order for {symbol} at +{profit_pct_float:.1f}%: {error_reason}")
                         else:
-                            self.logger.warning(f"Failed to create TP ladder order for {symbol} at {r_mult}R: {error_reason}")
+                            self.logger.warning(f"Failed to create TP ladder order for {symbol} at {r_mult_float}R: {error_reason}")
                         
                 except Exception as e:
                     # Format error logging based on format used
-                    if profit_pct_raw is not None:
-                        self.logger.error(f"Error creating TP ladder for {symbol} at +{profit_pct:.1f}%: {e}")
+                    if profit_pct_raw is not None and 'profit_pct_float' in locals():
+                        self.logger.error(f"Error creating TP ladder for {symbol} at +{profit_pct_float:.1f}%: {e}")
+                    elif 'r_mult_float' in locals():
+                        self.logger.error(f"Error creating TP ladder for {symbol} at {r_mult_float}R: {e}")
                     else:
-                        self.logger.error(f"Error creating TP ladder for {symbol} at {r_mult}R: {e}")
+                        self.logger.error(f"Error creating TP ladder for {symbol}: {e}")
                     continue
                     
         except Exception as e:

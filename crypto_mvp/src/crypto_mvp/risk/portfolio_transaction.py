@@ -11,9 +11,12 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from ..core.logging_utils import LoggerMixin
+from ..core.money import to_dec, ZERO
 from .portfolio import AdvancedPortfolioManager
+from .portfolio_validator import PortfolioValidator, validate_and_reconcile
 
 
 @dataclass
@@ -62,7 +65,8 @@ class PortfolioTransaction(LoggerMixin):
         portfolio_manager: AdvancedPortfolioManager,
         previous_equity: float,
         session_id: str,
-        validation_epsilon: Optional[float] = None
+        validation_epsilon: Optional[float] = None,
+        config: Optional[Dict[str, Any]] = None
     ):
         """Initialize the portfolio transaction.
         
@@ -71,15 +75,20 @@ class PortfolioTransaction(LoggerMixin):
             portfolio_manager: PortfolioManager instance
             previous_equity: Previous cycle's equity for validation
             session_id: Session identifier
-            validation_epsilon: Custom validation epsilon (auto-calculated if None)
+            validation_epsilon: Custom validation epsilon (deprecated, use validator config)
+            config: Configuration dictionary for validator
         """
         super().__init__()
         self.state_store = state_store
         self.portfolio_manager = portfolio_manager
         self.previous_equity = previous_equity
         self.session_id = session_id
+        self.config = config or {}
         
-        # Calculate validation epsilon: max(1.00, 0.0001 * previous_equity)
+        # Initialize portfolio validator with auto-reconciliation
+        self.validator = PortfolioValidator(config)
+        
+        # Legacy epsilon (deprecated in favor of adaptive epsilon)
         if validation_epsilon is None:
             self.validation_epsilon = max(1.00, 0.0001 * previous_equity)
         else:
@@ -299,41 +308,88 @@ class PortfolioTransaction(LoggerMixin):
         
         return staged_total
     
-    def _validate_staged_state(self, mark_prices: Dict[str, float]) -> Tuple[bool, float]:
-        """Validate the final staged state against previous equity.
+    def _validate_staged_state(self, mark_prices: Dict[str, float]) -> Tuple[bool, float, bool]:
+        """Validate the final staged state against previous equity with auto-reconciliation.
         
         Args:
             mark_prices: Current mark prices for all symbols
             
         Returns:
-            Tuple of (is_valid, staged_total)
+            Tuple of (is_valid, staged_total, is_reconciled)
         """
+        # Compute expected values
         staged_total = self._compute_staged_total(mark_prices)
         
-        # Validate: |staged_total - previous_equity| <= validation_epsilon
-        delta = abs(staged_total - self.previous_equity)
-        is_valid = delta <= self.validation_epsilon
+        # Get current values for comparison
+        current_cash = self.current_cash_equity["cash_balance"] if self.current_cash_equity else 0.0
+        expected_cash = current_cash + self.staged_cash.delta - self.staged_cash.fees
+        actual_cash = expected_cash  # In staged state, they match
         
-        if not is_valid:
-            self.logger.warning(
-                f"PORTFOLIO_DISCARD: validation_failed Δ=${delta:.2f}, ε=${self.validation_epsilon:.2f}"
-            )
-        else:
-            self.logger.debug(
-                f"Portfolio validation passed: staged_total=${staged_total:.2f}, "
-                f"previous_equity=${self.previous_equity:.2f}, Δ=${delta:.2f}, ε=${self.validation_epsilon:.2f}"
-            )
+        current_realized_pnl = self.current_cash_equity.get("total_realized_pnl", 0.0) if self.current_cash_equity else 0.0
+        expected_realized_pnl = current_realized_pnl + self.staged_realized_pnl.delta
+        actual_realized_pnl = expected_realized_pnl  # In staged state, they match
         
-        return is_valid, staged_total
+        # Compute positions value
+        expected_positions_value = self._compute_positions_value(mark_prices)
+        actual_positions_value = expected_positions_value  # In staged state, they match
+        
+        # Build positions dict for validation
+        positions = {}
+        for symbol in set(self.staged_positions.keys()):
+            # Get current position
+            current_qty = 0.0
+            current_entry_price = 0.0
+            current_strategy = "unknown"
+            
+            for pos in self.current_positions or []:
+                if pos["symbol"] == symbol:
+                    current_qty = pos["quantity"]
+                    current_entry_price = pos["entry_price"]
+                    current_strategy = pos["strategy"]
+                    break
+            
+            # Apply staged changes
+            staged_qty = current_qty
+            if symbol in self.staged_positions:
+                staged_qty += self.staged_positions[symbol].quantity_delta
+            
+            mark_price = mark_prices.get(symbol, current_entry_price)
+            
+            positions[symbol] = {
+                "quantity": staged_qty,
+                "entry_price": current_entry_price,
+                "current_price": mark_price,
+                "value": staged_qty * mark_price,
+                "strategy": current_strategy
+            }
+        
+        # Use new validator with auto-reconciliation
+        result = self.validator.validate_portfolio_state(
+            expected_cash=to_dec(expected_cash),
+            actual_cash=to_dec(actual_cash),
+            expected_positions_value=to_dec(expected_positions_value),
+            actual_positions_value=to_dec(actual_positions_value),
+            expected_realized_pnl=to_dec(expected_realized_pnl),
+            actual_realized_pnl=to_dec(actual_realized_pnl),
+            previous_equity=to_dec(self.previous_equity),
+            positions=positions,
+            fees_charged=to_dec(self.staged_cash.fees)
+        )
+        
+        # Log validation result
+        self.logger.info(self.validator.get_validation_summary(result))
+        
+        # Return decision
+        return result.should_commit, staged_total, result.is_reconciled
     
     def commit(self, mark_prices: Dict[str, float]) -> bool:
-        """Commit staged changes to persistent state.
+        """Commit staged changes to persistent state with auto-reconciliation.
         
         Args:
             mark_prices: Current mark prices for all symbols
             
         Returns:
-            True if committed successfully, False if validation failed
+            True if committed successfully (including reconciled), False only on critical errors
         """
         if self.committed:
             self.logger.warning("Transaction already committed")
@@ -343,11 +399,17 @@ class PortfolioTransaction(LoggerMixin):
             self.logger.error("Cannot commit rolled back transaction")
             return False
         
-        # Validate staged state
-        is_valid, staged_total = self._validate_staged_state(mark_prices)
+        # Validate staged state with auto-reconciliation
+        is_valid, staged_total, is_reconciled = self._validate_staged_state(mark_prices)
         
         if not is_valid:
+            # Critical error - discard changes
+            self.logger.error("PORTFOLIO_DISCARD: Critical validation errors - changes discarded")
             return False
+        
+        # Log reconciliation if applied
+        if is_reconciled:
+            self.logger.warning("RECONCILED: Non-critical mismatch auto-reconciled - state persists")
         
         try:
             # Commit cash/equity changes
@@ -362,10 +424,11 @@ class PortfolioTransaction(LoggerMixin):
             self.committed = True
             
             # Log successful commit
+            commit_status = "RECONCILED" if is_reconciled else "COMMITTED"
             self.logger.info(
-                f"PORTFOLIO_COMMIT: cash=${staged_total:.2f}, "
+                f"PORTFOLIO_{commit_status}: cash=${staged_total:.2f}, "
                 f"positions=${self._compute_positions_value(mark_prices):.2f}, "
-                f"total=${staged_total:.2f} (Δ=${staged_total - self.previous_equity:.2f}, ε=${self.validation_epsilon:.2f})"
+                f"total=${staged_total:.2f} (Δ=${staged_total - self.previous_equity:.2f})"
             )
             
             return True
@@ -522,16 +585,18 @@ def portfolio_transaction(
     portfolio_manager: AdvancedPortfolioManager,
     previous_equity: float,
     session_id: str,
-    validation_epsilon: Optional[float] = None
+    validation_epsilon: Optional[float] = None,
+    config: Optional[Dict[str, Any]] = None
 ):
-    """Context manager factory for portfolio transactions.
+    """Context manager factory for portfolio transactions with auto-reconciliation.
     
     Args:
         state_store: StateStore instance
         portfolio_manager: PortfolioManager instance
         previous_equity: Previous cycle's equity
         session_id: Session identifier
-        validation_epsilon: Custom validation epsilon
+        validation_epsilon: Custom validation epsilon (deprecated)
+        config: Configuration dictionary for validator
         
     Yields:
         PortfolioTransaction instance
@@ -541,7 +606,8 @@ def portfolio_transaction(
         portfolio_manager=portfolio_manager,
         previous_equity=previous_equity,
         session_id=session_id,
-        validation_epsilon=validation_epsilon
+        validation_epsilon=validation_epsilon,
+        config=config
     )
     
     with transaction:

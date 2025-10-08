@@ -238,21 +238,37 @@ class SentimentExecutor(LoggerMixin):
                 )
                 
                 if stop_loss_price is None or take_profit_price is None:
+                    # Import Decimal helper for fallback calculation
+                    from ...core.money import to_dec, ONE
+                    
+                    # Convert to Decimal for safe math
+                    price_dec = to_dec(current_price)
+                    sl_pct_dec = to_dec(self.stop_loss_pct)
+                    tp_pct_dec = to_dec(self.take_profit_pct)
+                    
                     # Fallback to percent-based calculation
                     if order_side == OrderSide.BUY:
-                        stop_loss_price = current_price * (1 - self.stop_loss_pct)
-                        take_profit_price = current_price * (1 + self.take_profit_pct)
+                        stop_loss_price = float(price_dec * (ONE - sl_pct_dec))
+                        take_profit_price = float(price_dec * (ONE + tp_pct_dec))
                     else:  # SELL
-                        stop_loss_price = current_price * (1 + self.stop_loss_pct)
-                        take_profit_price = current_price * (1 - self.take_profit_pct)
+                        stop_loss_price = float(price_dec * (ONE + sl_pct_dec))
+                        take_profit_price = float(price_dec * (ONE - tp_pct_dec))
             else:
+                # Import Decimal helper
+                from ...core.money import to_dec, ONE
+                
+                # Convert to Decimal for safe math
+                price_dec = to_dec(current_price)
+                sl_pct_dec = to_dec(self.stop_loss_pct)
+                tp_pct_dec = to_dec(self.take_profit_pct)
+                
                 # Calculate stop loss and take profit prices using percent-based method
                 if order_side == OrderSide.BUY:
-                    stop_loss_price = current_price * (1 - self.stop_loss_pct)
-                    take_profit_price = current_price * (1 + self.take_profit_pct)
+                    stop_loss_price = float(price_dec * (ONE - sl_pct_dec))
+                    take_profit_price = float(price_dec * (ONE + tp_pct_dec))
                 else:  # SELL
-                    stop_loss_price = current_price * (1 + self.stop_loss_pct)
-                    take_profit_price = current_price * (1 - self.take_profit_pct)
+                    stop_loss_price = float(price_dec * (ONE + sl_pct_dec))
+                    take_profit_price = float(price_dec * (ONE - tp_pct_dec))
 
             # Create stop loss order
             stop_loss_order, stop_loss_error = self.order_manager.create_order(

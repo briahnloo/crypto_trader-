@@ -1,0 +1,57 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║                    🔴 THE ACTUAL BUG - FINALLY!                          ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+🐛 THE BUG:
+
+   order_manager.state_store = None  ← Never initialized!
+   
+   When trades execute:
+     execute_order() → apply_fill_cash_impact()
+       ↓
+     if not self.state_store:  ← TRUE!
+         return False  ← Cash deduction SKIPPED!
+   
+   Result: Positions saved, cash never debited!
+
+══════════════════════════════════════════════════════════════════════════
+
+✅ THE FIX (Line 190 in trading_system.py):
+
+   self.order_manager.set_state_store(self.state_store)
+   
+   Now order_manager CAN debit cash!
+
+══════════════════════════════════════════════════════════════════════════
+
+🧪 TO TEST:
+
+   1. Clear cache and database:
+      cd crypto_mvp
+      rm -rf src/**/__pycache__
+      rm -f trading_state.db
+   
+   2. Start system:
+      python -m crypto_mvp --capital 10000
+   
+   3. Watch for:
+      ✅ CRITICAL: State store set on order_manager
+      🟡 SIMULATION_MODE_FILL
+      🟡 APPLYING_CASH_IMPACT
+      💳 DEBIT_CASH: $10,000→$9,XXX
+      ✅ DEBIT_COMPLETE
+   
+   4. Verify:
+      python diagnose_db.py
+      # Should show Discrepancy: $0.00
+
+══════════════════════════════════════════════════════════════════════════
+
+🎉 THIS IS THE ACTUAL ROOT CAUSE!
+
+   order_manager had no access to state_store
+   → apply_fill_cash_impact() failed silently
+   → positions saved without cash deduction
+   → equity inflated!
+
+══════════════════════════════════════════════════════════════════════════

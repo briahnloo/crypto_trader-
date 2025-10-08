@@ -8,10 +8,14 @@ with ATR-based levels and trailing take-profit functionality.
 import asyncio
 import time
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, Tuple, Callable, List
+from typing import Optional, Dict, Any, Tuple, Callable, List, Union
+from decimal import Decimal, getcontext
 import logging
 
 from ..core.logging_utils import LoggerMixin
+
+# Set decimal precision
+getcontext().prec = 28
 
 logger = logging.getLogger(__name__)
 
@@ -23,21 +27,21 @@ class OCOOrder:
         self,
         symbol: str,
         side: str,
-        entry_price: float,
-        quantity: float,
-        stop_loss: float,
-        take_profit: float,
-        atr: float,
+        entry_price: Union[float, Decimal],
+        quantity: Union[float, Decimal],
+        stop_loss: Union[float, Decimal],
+        take_profit: Union[float, Decimal],
+        atr: Union[float, Decimal],
         strategy: str = "unknown",
         fill_id: str = ""
     ):
         self.symbol = symbol
         self.side = side
-        self.entry_price = entry_price
-        self.quantity = quantity
-        self.stop_loss = stop_loss
-        self.take_profit = take_profit
-        self.atr = atr
+        self.entry_price = Decimal(str(entry_price)) if not isinstance(entry_price, Decimal) else entry_price
+        self.quantity = Decimal(str(quantity)) if not isinstance(quantity, Decimal) else quantity
+        self.stop_loss = Decimal(str(stop_loss)) if not isinstance(stop_loss, Decimal) else stop_loss
+        self.take_profit = Decimal(str(take_profit)) if not isinstance(take_profit, Decimal) else take_profit
+        self.atr = Decimal(str(atr)) if not isinstance(atr, Decimal) else atr
         self.strategy = strategy
         self.fill_id = fill_id
         
@@ -48,10 +52,10 @@ class OCOOrder:
         
         # Trailing state
         self.trailing_enabled = False
-        self.trail_after_atr = 1.0
-        self.trail_step_atr = 0.3
-        self.highest_favorable_price = entry_price
-        self.current_tp_price = take_profit
+        self.trail_after_atr = Decimal('1.0')
+        self.trail_step_atr = Decimal('0.3')
+        self.highest_favorable_price = self.entry_price
+        self.current_tp_price = self.take_profit
         
         # Status
         self.status = "pending"  # pending, active, cancelled, filled, time_stopped
@@ -62,7 +66,7 @@ class OCOOrder:
         self.time_stop_minutes = 30
         self.time_stop_enabled = True
     
-    def update_trailing_tp(self, current_price: float) -> bool:
+    def update_trailing_tp(self, current_price: Union[float, Decimal]) -> bool:
         """
         Update trailing take-profit based on current price.
         
@@ -75,29 +79,31 @@ class OCOOrder:
         if not self.trailing_enabled:
             return False
         
+        current_price_decimal = Decimal(str(current_price)) if not isinstance(current_price, Decimal) else current_price
+        
         # Check if we're in favorable territory
         if self.side.upper() == "BUY":
-            if current_price > self.highest_favorable_price:
-                self.highest_favorable_price = current_price
+            if current_price_decimal > self.highest_favorable_price:
+                self.highest_favorable_price = current_price_decimal
                 
                 # Check if we should start trailing
-                favorable_move = current_price - self.entry_price
+                favorable_move = current_price_decimal - self.entry_price
                 if favorable_move >= self.trail_after_atr * self.atr:
                     # Calculate new TP price
-                    new_tp = current_price - (self.trail_step_atr * self.atr)
+                    new_tp = current_price_decimal - (self.trail_step_atr * self.atr)
                     if new_tp > self.current_tp_price:
                         self.current_tp_price = new_tp
                         self.last_updated = datetime.now()
                         return True
         else:  # SELL
-            if current_price < self.highest_favorable_price:
-                self.highest_favorable_price = current_price
+            if current_price_decimal < self.highest_favorable_price:
+                self.highest_favorable_price = current_price_decimal
                 
                 # Check if we should start trailing
-                favorable_move = self.entry_price - current_price
+                favorable_move = self.entry_price - current_price_decimal
                 if favorable_move >= self.trail_after_atr * self.atr:
                     # Calculate new TP price
-                    new_tp = current_price + (self.trail_step_atr * self.atr)
+                    new_tp = current_price_decimal + (self.trail_step_atr * self.atr)
                     if new_tp < self.current_tp_price:
                         self.current_tp_price = new_tp
                         self.last_updated = datetime.now()
@@ -131,7 +137,7 @@ class OCOOrder:
         if risk <= 0:
             return 0.0
         
-        return reward / risk
+        return float(reward / risk)
 
 
 class OCOManager(LoggerMixin):
@@ -156,11 +162,11 @@ class OCOManager(LoggerMixin):
         
         # OCO settings
         self.oco_enabled = config.get("oco_enabled", True)
-        self.tp_atr = config.get("tp_atr", 0.7)
-        self.sl_atr = config.get("sl_atr", 0.5)
+        self.tp_atr = Decimal(str(config.get("tp_atr", 0.7)))
+        self.sl_atr = Decimal(str(config.get("sl_atr", 0.5)))
         self.time_stop_minutes = config.get("time_stop_minutes", 30)
-        self.trail_after_atr = config.get("trail_after_atr", 1.0)
-        self.trail_step_atr = config.get("trail_step_atr", 0.3)
+        self.trail_after_atr = Decimal(str(config.get("trail_after_atr", 1.0)))
+        self.trail_step_atr = Decimal(str(config.get("trail_step_atr", 0.3)))
         
         # Active OCO orders
         self.active_oco_orders: Dict[str, OCOOrder] = {}  # fill_id -> OCOOrder
@@ -194,8 +200,8 @@ class OCOManager(LoggerMixin):
         self,
         symbol: str,
         side: str,
-        entry_price: float,
-        quantity: float,
+        entry_price: Union[float, Decimal],
+        quantity: Union[float, Decimal],
         strategy: str = "unknown",
         fill_id: str = ""
     ) -> Tuple[bool, Dict[str, Any]]:
@@ -220,31 +226,37 @@ class OCOManager(LoggerMixin):
             self.logger.warning("OCO callbacks not set, skipping OCO placement")
             return False, {"reason": "callbacks_not_set"}
         
+        # Convert inputs to Decimal
+        entry_price_decimal = Decimal(str(entry_price)) if not isinstance(entry_price, Decimal) else entry_price
+        quantity_decimal = Decimal(str(quantity)) if not isinstance(quantity, Decimal) else quantity
+        
         # Get ATR for 1m timeframe with 60 samples
-        atr = self.get_atr_callback(symbol)
-        if not atr or atr <= 0:
+        atr_raw = self.get_atr_callback(symbol)
+        if not atr_raw or atr_raw <= 0:
             self.logger.warning(f"REJECTED: {symbol} OCO (reason=no_atr)")
-            return False, {"reason": "no_atr", "atr": atr}
+            return False, {"reason": "no_atr", "atr": atr_raw}
+        
+        atr = Decimal(str(atr_raw))
         
         # Calculate stop-loss and take-profit levels
         if side.upper() == "BUY":
-            stop_loss = entry_price - (self.sl_atr * atr)
-            take_profit = entry_price + (self.tp_atr * atr)
+            stop_loss = entry_price_decimal - (self.sl_atr * atr)
+            take_profit = entry_price_decimal + (self.tp_atr * atr)
         else:  # SELL
-            stop_loss = entry_price + (self.sl_atr * atr)
-            take_profit = entry_price - (self.tp_atr * atr)
+            stop_loss = entry_price_decimal + (self.sl_atr * atr)
+            take_profit = entry_price_decimal - (self.tp_atr * atr)
         
         # Validate levels
         if stop_loss <= 0 or take_profit <= 0:
             self.logger.warning(f"REJECTED: {symbol} OCO (reason=invalid_levels)")
-            return False, {"reason": "invalid_levels", "sl": stop_loss, "tp": take_profit}
+            return False, {"reason": "invalid_levels", "sl": float(stop_loss), "tp": float(take_profit)}
         
         # Create OCO order object
         oco_order = OCOOrder(
             symbol=symbol,
             side=side,
-            entry_price=entry_price,
-            quantity=quantity,
+            entry_price=entry_price_decimal,
+            quantity=quantity_decimal,
             stop_loss=stop_loss,
             take_profit=take_profit,
             atr=atr,
@@ -264,7 +276,7 @@ class OCOManager(LoggerMixin):
         # Place stop-loss order
         sl_order_id = self.create_order_callback(
             symbol, f"SELL" if side.upper() == "BUY" else "BUY", 
-            quantity, stop_loss, "stop"
+            float(quantity_decimal), float(stop_loss), "stop"
         )
         if not sl_order_id:
             self.logger.warning(f"REJECTED: {symbol} OCO (reason=sl_order_failed)")
@@ -275,7 +287,7 @@ class OCOManager(LoggerMixin):
         # Place take-profit order
         tp_order_id = self.create_order_callback(
             symbol, f"SELL" if side.upper() == "BUY" else "BUY",
-            quantity, take_profit, "limit"
+            float(quantity_decimal), float(take_profit), "limit"
         )
         if not tp_order_id:
             # Cancel stop-loss if take-profit fails
@@ -293,16 +305,16 @@ class OCOManager(LoggerMixin):
         rr_ratio = oco_order.get_risk_reward_ratio()
         
         self.logger.info(
-            f"OCO_PLACED: {symbol} {side} {quantity:.6f} @ ${entry_price:.4f} "
-            f"SL=${stop_loss:.4f} TP=${take_profit:.4f} ATR=${atr:.4f} "
+            f"OCO_PLACED: {symbol} {side} {float(quantity_decimal):.6f} @ ${float(entry_price_decimal):.4f} "
+            f"SL=${float(stop_loss):.4f} TP=${float(take_profit):.4f} ATR=${float(atr):.4f} "
             f"RR={rr_ratio:.2f} (fill_id={fill_id})"
         )
         
         return True, {
             "oco_order": oco_order,
-            "stop_loss": stop_loss,
-            "take_profit": take_profit,
-            "atr": atr,
+            "stop_loss": float(stop_loss),
+            "take_profit": float(take_profit),
+            "atr": float(atr),
             "risk_reward_ratio": rr_ratio,
             "sl_order_id": sl_order_id,
             "tp_order_id": tp_order_id
@@ -339,8 +351,8 @@ class OCOManager(LoggerMixin):
                 new_tp_order_id = self.create_order_callback(
                     oco_order.symbol,
                     f"SELL" if oco_order.side.upper() == "BUY" else "BUY",
-                    oco_order.quantity,
-                    oco_order.current_tp_price,
+                    float(oco_order.quantity),
+                    float(oco_order.current_tp_price),
                     "limit"
                 )
                 
@@ -350,7 +362,7 @@ class OCOManager(LoggerMixin):
                     
                     self.logger.info(
                         f"TRAILING_TP: {oco_order.symbol} {oco_order.side} "
-                        f"TP=${oco_order.current_tp_price:.4f} "
+                        f"TP=${float(oco_order.current_tp_price):.4f} "
                         f"(fill_id={fill_id})"
                     )
         
@@ -400,7 +412,7 @@ class OCOManager(LoggerMixin):
                     time_stop_order_id = self.create_order_callback(
                         oco_order.symbol,
                         exit_side,
-                        oco_order.quantity,
+                        float(oco_order.quantity),
                         exit_price,
                         "limit"
                     )
@@ -411,7 +423,7 @@ class OCOManager(LoggerMixin):
                         
                         self.logger.info(
                             f"TIME_STOP: {oco_order.symbol} {oco_order.side} "
-                            f"exit_price=${exit_price:.4f} (fill_id={fill_id}, "
+                            f"exit_price=${float(exit_price):.4f} (fill_id={fill_id}, "
                             f"age={oco_order.time_stop_minutes}min)"
                         )
                     else:
@@ -419,7 +431,7 @@ class OCOManager(LoggerMixin):
                         market_order_id = self.create_order_callback(
                             oco_order.symbol,
                             exit_side,
-                            oco_order.quantity,
+                            float(oco_order.quantity),
                             0.0,  # Market order
                             "market"
                         )

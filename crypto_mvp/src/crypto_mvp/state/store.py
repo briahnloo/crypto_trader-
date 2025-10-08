@@ -47,6 +47,9 @@ class StateStore(LoggerMixin):
             )
             self.connection.row_factory = sqlite3.Row  # Enable dict-like access
             
+            # Log connection status and autocommit mode
+            self.logger.info(f"🔌 DB_CONNECTION: path={self.db_path}, autocommit={self.connection.isolation_level is None}")
+            
             # Create tables
             self._create_tables()
             
@@ -456,17 +459,23 @@ class StateStore(LoggerMixin):
         if not self.initialized:
             self.initialize()
         
+        # Log entry point
+        self.logger.info(f"💾 SAVE_CASH_EQUITY_START: cash={cash_balance}, equity={total_equity}, session={session_id}")
+        
         # Validate data consistency before saving
         self._validate_cash_equity_data(cash_balance, total_equity, total_fees, total_realized_pnl, total_unrealized_pnl)
         
         cursor = self.connection.cursor()
+        self.logger.info(f"📝 EXECUTING_INSERT: VALUES=({cash_balance}, {total_equity}, {previous_equity}, {total_fees}, {total_realized_pnl}, {total_unrealized_pnl}, '{session_id}')")
         cursor.execute("""
             INSERT INTO cash_equity 
             (cash_balance, total_equity, previous_equity, total_fees, total_realized_pnl, total_unrealized_pnl, session_id)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (cash_balance, total_equity, previous_equity, total_fees, total_realized_pnl, total_unrealized_pnl, session_id))
+        self.logger.info(f"✅ INSERT_EXECUTED: rowcount={cursor.rowcount}")
         
         self.connection.commit()
+        self.logger.info(f"✅ COMMIT_COMPLETE: Database transaction committed")
         
         # Log successful save with validation
         self.logger.debug(f"CASH_EQUITY_SAVED: cash=${cash_balance:.2f}, equity=${total_equity:.2f}, fees=${total_fees:.2f}")
@@ -570,6 +579,15 @@ class StateStore(LoggerMixin):
             self.initialize()
         
         cursor = self.connection.cursor()
+        
+        # Debug parameter types
+        self.logger.debug(f"DB_BIND_DEBUG: total_equity={total_equity} (type: {type(total_equity)})")
+        self.logger.debug(f"DB_BIND_DEBUG: cash_balance={cash_balance} (type: {type(cash_balance)})")
+        self.logger.debug(f"DB_BIND_DEBUG: total_positions_value={total_positions_value} (type: {type(total_positions_value)})")
+        self.logger.debug(f"DB_BIND_DEBUG: total_unrealized_pnl={total_unrealized_pnl} (type: {type(total_unrealized_pnl)})")
+        self.logger.debug(f"DB_BIND_DEBUG: position_count={position_count} (type: {type(position_count)})")
+        self.logger.debug(f"DB_BIND_DEBUG: session_id={session_id} (type: {type(session_id)})")
+        
         cursor.execute("""
             INSERT INTO portfolio_snapshots 
             (total_equity, cash_balance, total_positions_value, total_unrealized_pnl, position_count, session_id)
@@ -862,13 +880,18 @@ class StateStore(LoggerMixin):
         }
 
     def get_session_cash(self, session_id: str) -> float:
-        """Get current session cash balance.
+        """Get current session cash balance by CALCULATING from trades (bulletproof method).
+        
+        This method RECALCULATES cash from scratch using trades and positions to ensure
+        accuracy regardless of save_cash_equity() bugs.
+        
+        Formula: cash = initial_capital - sum(buy_trade_notionals) + sum(sell_trade_notionals)
         
         Args:
             session_id: Session identifier (mandatory)
             
         Returns:
-            Current cash balance for the session
+            Calculated cash balance for the session
             
         Raises:
             ValueError: If session_id is not provided
@@ -879,17 +902,52 @@ class StateStore(LoggerMixin):
         if not self.initialized:
             self.initialize()
         
-        latest_cash_equity = self.get_latest_cash_equity(session_id)
-        return latest_cash_equity["cash_balance"] if latest_cash_equity else 0.0
+        # Get initial capital from first cash_equity entry
+        cursor = self.connection.cursor()
+        cursor.execute(
+            "SELECT cash_balance FROM cash_equity WHERE session_id = ? ORDER BY id ASC LIMIT 1",
+            (session_id,)
+        )
+        row = cursor.fetchone()
+        initial_capital = row[0] if row else 10000.0
+        
+        # Calculate total spent on buys and received from sells
+        cursor.execute(
+            "SELECT side, quantity, price, fees FROM trades WHERE session_id = ? ORDER BY id",
+            (session_id,)
+        )
+        
+        total_spent = 0.0
+        total_received = 0.0
+        total_fees = 0.0
+        
+        for trade in cursor.fetchall():
+            side, quantity, price, fees = trade
+            notional = quantity * price
+            total_fees += fees
+            
+            if side.upper() == 'BUY':
+                total_spent += notional + fees
+            elif side.upper() == 'SELL':
+                total_received += notional - fees
+        
+        # Calculate current cash
+        calculated_cash = initial_capital - total_spent + total_received
+        
+        self.logger.info(f"💰 CALCULATED_CASH: initial=${initial_capital:.2f}, spent=${total_spent:.2f}, received=${total_received:.2f}, fees=${total_fees:.2f} → cash=${calculated_cash:.2f}")
+        
+        return calculated_cash
 
     def get_session_equity(self, session_id: str) -> float:
-        """Get current session total equity.
+        """Get current session total equity by CALCULATING (bulletproof method).
+        
+        This method RECALCULATES equity from scratch: cash + positions_value
         
         Args:
             session_id: Session identifier (mandatory)
             
         Returns:
-            Current total equity for the session
+            Calculated total equity for the session
             
         Raises:
             ValueError: If session_id is not provided
@@ -900,8 +958,18 @@ class StateStore(LoggerMixin):
         if not self.initialized:
             self.initialize()
         
-        latest_cash_equity = self.get_latest_cash_equity(session_id)
-        return latest_cash_equity["total_equity"] if latest_cash_equity else 0.0
+        # Get calculated cash (from trades)
+        cash = self.get_session_cash(session_id)
+        
+        # Get positions value
+        positions = self.get_positions(session_id)
+        positions_value = sum(pos['quantity'] * pos['current_price'] for pos in positions)
+        
+        calculated_equity = cash + positions_value
+        
+        self.logger.info(f"💎 CALCULATED_EQUITY: cash=${cash:.2f} + positions=${positions_value:.2f} = ${calculated_equity:.2f}")
+        
+        return calculated_equity
 
     def get_session_deployed_capital(self, session_id: str) -> float:
         """Get current session deployed capital (total equity - cash balance).
@@ -964,10 +1032,18 @@ class StateStore(LoggerMixin):
         # Get latest equity data to update
         latest_cash_equity = self.get_latest_cash_equity(session_id)
         
-        # Update cash balance
+        # CRITICAL FIX: Recalculate equity = cash + positions_value
+        # Don't preserve old equity - it must reflect current cash + positions
+        positions = self.get_positions(session_id)
+        positions_value = sum(pos['quantity'] * pos['current_price'] for pos in positions)
+        recalculated_equity = new_cash + positions_value
+        
+        self.logger.info(f"💳 DEBIT_CASH: ${current_cash:.2f}→${new_cash:.2f} (debit=${total_debit:.2f}), positions=${positions_value:.2f}, equity=${recalculated_equity:.2f}")
+        
+        # Update cash balance with recalculated equity
         self.save_cash_equity(
             cash_balance=new_cash,
-            total_equity=latest_cash_equity["total_equity"] if latest_cash_equity else new_cash,
+            total_equity=recalculated_equity,  # ← CRITICAL FIX: Recalculated, not preserved!
             total_fees=(latest_cash_equity["total_fees"] if latest_cash_equity else 0.0) + fees,
             total_realized_pnl=latest_cash_equity.get("total_realized_pnl", 0.0) if latest_cash_equity else 0.0,
             total_unrealized_pnl=latest_cash_equity.get("total_unrealized_pnl", 0.0) if latest_cash_equity else 0.0,
@@ -975,7 +1051,7 @@ class StateStore(LoggerMixin):
             previous_equity=latest_cash_equity.get("previous_equity", new_cash) if latest_cash_equity else new_cash
         )
         
-        self.logger.debug(f"Debited ${total_debit:.2f} from cash: ${current_cash:.2f} → ${new_cash:.2f}")
+        self.logger.info(f"✅ DEBIT_COMPLETE: cash=${new_cash:.2f}, equity=${recalculated_equity:.2f}")
         return True
 
     def credit_cash(self, session_id: str, amount: float, fees: float = 0.0) -> bool:
@@ -1010,10 +1086,18 @@ class StateStore(LoggerMixin):
         # Get latest equity data to update
         latest_cash_equity = self.get_latest_cash_equity(session_id)
         
-        # Update cash balance
+        # CRITICAL FIX: Recalculate equity = cash + positions_value
+        # Don't preserve old equity - it must reflect current cash + positions
+        positions = self.get_positions(session_id)
+        positions_value = sum(pos['quantity'] * pos['current_price'] for pos in positions)
+        recalculated_equity = new_cash + positions_value
+        
+        self.logger.info(f"💰 CREDIT_CASH: ${current_cash:.2f}→${new_cash:.2f} (credit=${net_credit:.2f}), positions=${positions_value:.2f}, equity=${recalculated_equity:.2f}")
+        
+        # Update cash balance with recalculated equity
         self.save_cash_equity(
             cash_balance=new_cash,
-            total_equity=latest_cash_equity["total_equity"] if latest_cash_equity else new_cash,
+            total_equity=recalculated_equity,  # ← CRITICAL FIX: Recalculated, not preserved!
             total_fees=(latest_cash_equity["total_fees"] if latest_cash_equity else 0.0) + fees,
             total_realized_pnl=latest_cash_equity.get("total_realized_pnl", 0.0) if latest_cash_equity else 0.0,
             total_unrealized_pnl=latest_cash_equity.get("total_unrealized_pnl", 0.0) if latest_cash_equity else 0.0,
@@ -1021,7 +1105,7 @@ class StateStore(LoggerMixin):
             previous_equity=latest_cash_equity.get("previous_equity", new_cash) if latest_cash_equity else new_cash
         )
         
-        self.logger.debug(f"Credited ${net_credit:.2f} to cash: ${current_cash:.2f} → ${new_cash:.2f}")
+        self.logger.info(f"✅ CREDIT_COMPLETE: cash=${new_cash:.2f}, equity=${recalculated_equity:.2f}")
         return True
 
     def save_signal_window(

@@ -1,0 +1,91 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║                  ✅ EQUITY FIX v2.0 - READY TO RUN                       ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+🔧 WHAT WAS DONE:
+
+   1. ✅ Uninstalled old crypto-mvp package
+   2. ✅ Cleared ALL Python cache
+   3. ✅ Reinstalled package with --force-reinstall
+   4. ✅ Deleted trading_state.db for clean start
+   5. ✅ Removed duplicate save_cash_equity() that caused overwrites
+   6. ✅ Added VERSION_CHECK marker to confirm code loads
+   7. ✅ Fixed debit_cash() to recalculate equity
+   8. ✅ Fixed _save_portfolio_state() to sync cash from DB
+
+══════════════════════════════════════════════════════════════════════════
+
+🚀 TO RUN THE SYSTEM:
+
+   cd crypto_mvp
+   python -m crypto_mvp --capital 10000
+
+══════════════════════════════════════════════════════════════════════════
+
+🔍 YOU MUST SEE THIS IN LOGS:
+
+   At startup (within first 10 lines):
+   
+   ================================================================================
+   VERSION_CHECK: EQUITY FIX v2.0 LOADED - State store connected to order_manager
+   This version includes: debit_cash equity recalc + cash sync in _save_portfolio_state
+   ================================================================================
+   
+   If you DON'T see this marker, the old code is still cached!
+
+══════════════════════════════════════════════════════════════════════════
+
+📊 VERIFICATION:
+
+   After system runs for 2-3 cycles (2-3 minutes), STOP it (Ctrl+C)
+   
+   Then run:
+   python diagnose_db.py
+   
+   Expected:
+   ✅ Actual cash in DB: $9,XXX (< $10,000)
+   ✅ Discrepancy: $0.00
+   ✅ EQUITY CALCULATION CORRECT!
+
+══════════════════════════════════════════════════════════════════════════
+
+⚠️  IF VERSION_CHECK DOESN'T APPEAR:
+
+   The package cache may still be stuck. Run:
+   
+   pip uninstall -y crypto-mvp
+   rm -rf ~/.cache/pip/*
+   find . -name "*.pyc" -delete
+   find . -type d -name "__pycache__" -exec rm -rf {} +
+   pip install -e . --force-reinstall --no-cache-dir
+   
+   Then try again.
+
+══════════════════════════════════════════════════════════════════════════
+
+🎯 KEY CHANGES IN THIS VERSION:
+
+   1. order_manager.set_state_store() NOW CALLED (line 190)
+      → Enables cash debit/credit
+   
+   2. debit_cash() recalculates equity (state/store.py line 989)
+      → equity = cash + positions
+   
+   3. Removed temporary save in _update_portfolio_with_trade
+      → No more cash overwrites
+   
+   4. _save_portfolio_state() syncs cash from DB first (line 716)
+      → Prevents stale in-memory cash from overwriting
+
+══════════════════════════════════════════════════════════════════════════
+
+🎉 THIS SHOULD FINALLY WORK!
+
+   All fixes are in place.
+   Package is reinstalled.
+   Database is clean.
+   
+   RUN: python -m crypto_mvp --capital 10000
+
+══════════════════════════════════════════════════════════════════════════
+

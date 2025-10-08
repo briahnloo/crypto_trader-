@@ -1306,7 +1306,7 @@ class ProfitOptimizedRiskManager(LoggerMixin):
             if is_long:
                 # LONG position: stop = high_since_entry - n_atr * atr
                 high_since_entry = meta.get("high_since_entry", entry_price)
-                stop_price = high_since_entry - (n_atr * atr)
+                stop_price = float(high_since_entry) - (n_atr * atr)
                 
                 if mark <= stop_price:
                     return ExitAction(
@@ -1318,7 +1318,7 @@ class ProfitOptimizedRiskManager(LoggerMixin):
             else:
                 # SHORT position: stop = low_since_entry + n_atr * atr
                 low_since_entry = meta.get("low_since_entry", entry_price)
-                stop_price = low_since_entry + (n_atr * atr)
+                stop_price = float(low_since_entry) + (n_atr * atr)
                 
                 if mark >= stop_price:
                     return ExitAction(

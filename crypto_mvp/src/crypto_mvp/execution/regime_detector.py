@@ -125,31 +125,48 @@ class RegimeDetector(LoggerMixin):
         
         return False
     
-    def detect_regime(self, symbol: str) -> Tuple[str, Dict[str, Any]]:
+    def detect_regime(self, symbol: str, data_quality: str = "ok") -> Tuple[str, Dict[str, Any]]:
         """
         Detect market regime for a symbol.
         
         Args:
             symbol: Trading symbol
+            data_quality: Data quality status ("ok" | "stale" | "unsupported" | "missing")
             
         Returns:
             Tuple of (regime, details_dict)
-            - regime: "trend", "range", or "unknown (warmup)"
-            - details_dict: Dictionary with indicator values and thresholds
+            - regime: "trend", "range", or "unknown"
+            - details_dict: Dictionary with indicator values, thresholds, and eligible flag
         """
-        # Check for warmup conditions first
+        # Check data quality first
+        if data_quality != "ok":
+            details = {
+                "symbol": symbol,
+                "reason": f"data_quality_{data_quality}",
+                "regime": "unknown",
+                "eligible": False,
+                "data_quality": data_quality,
+                "indicator_status": "unavailable"
+            }
+            self.logger.info(f"REGIME_EXCLUDE: symbol={symbol}, reason=data_quality:{data_quality}")
+            return "unknown", details
+        
+        # Check for warmup conditions
         if self._is_in_warmup(symbol):
             details = {
                 "symbol": symbol,
                 "reason": "insufficient_data_warmup",
-                "regime": "unknown (warmup)",
+                "regime": "unknown",
+                "eligible": False,
+                "data_quality": "ok",
+                "indicator_status": "unavailable",
                 "ema_fast_period": self.ema_fast_period,
                 "ema_slow_period": self.ema_slow_period,
                 "adx_period": self.adx_period,
                 "adx_threshold": self.adx_threshold
             }
-            self.logger.info(f"REGIME: {symbol} = unknown (warmup) (reason=insufficient_data_warmup)")
-            return "unknown (warmup)", details
+            self.logger.info(f"REGIME_EXCLUDE: symbol={symbol}, reason=insufficient_data_warmup")
+            return "unknown", details
         
         # Get EMA values
         ema_fast = None
@@ -185,17 +202,23 @@ class RegimeDetector(LoggerMixin):
         # Check if indicators are available
         if ema_fast is None or ema_slow is None or adx is None:
             details["reason"] = "missing_indicators"
-            details["regime"] = "range"
-            self.logger.info(f"REGIME: {symbol} = range (reason=missing_indicators)")
-            return "range", details
+            details["regime"] = "unknown"
+            details["eligible"] = False
+            details["data_quality"] = data_quality
+            details["indicator_status"] = "unavailable"
+            self.logger.info(f"REGIME_EXCLUDE: symbol={symbol}, reason=missing_indicators")
+            return "unknown", details
         
         # Check for invalid values
         if (math.isnan(ema_fast) or math.isnan(ema_slow) or math.isnan(adx) or
             ema_fast <= 0 or ema_slow <= 0 or adx < 0):
             details["reason"] = "invalid_indicators"
-            details["regime"] = "range"
-            self.logger.info(f"REGIME: {symbol} = range (reason=invalid_indicators)")
-            return "range", details
+            details["regime"] = "unknown"
+            details["eligible"] = False
+            details["data_quality"] = data_quality
+            details["indicator_status"] = "unavailable"
+            self.logger.info(f"REGIME_EXCLUDE: symbol={symbol}, reason=invalid_indicators")
+            return "unknown", details
         
         # Determine regime based on conditions
         # Trend: EMA50 > EMA200 and ADX(14) > 20
@@ -214,6 +237,9 @@ class RegimeDetector(LoggerMixin):
         details["reason"] = reason
         details["regime"] = regime
         details["is_trend"] = is_trend
+        details["eligible"] = True
+        details["data_quality"] = data_quality
+        details["indicator_status"] = "ok"
         
         self.logger.info(
             f"REGIME: {symbol} = {regime} (reason={reason}) "

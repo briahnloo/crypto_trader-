@@ -94,6 +94,7 @@ class ProfitLogger(LoggerMixin):
             self.logger.warning("No trade ledger available, returning empty metrics")
             return {
                 "total_trades": 0,
+                "trade_count": 0,  # Number of fills
                 "total_volume": 0.0,
                 "total_fees": 0.0,
                 "total_notional": 0.0,

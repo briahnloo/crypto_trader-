@@ -6,7 +6,7 @@ import asyncio
 import random
 import re
 import time
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_DOWN, Decimal, getcontext
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Union, Optional
@@ -16,6 +16,82 @@ import aiohttp
 import requests
 import time
 from loguru import logger
+
+# Set decimal precision
+getcontext().prec = 28
+
+# Import pricing snapshot system
+from .pricing_snapshot import get_current_pricing_snapshot, PricingSnapshot, is_fresh_price_fetching_disabled
+
+
+class PricingContextError(Exception):
+    """Raised when pricing context is missing or invalid."""
+    pass
+
+
+class PricingContext:
+    """
+    Pricing context object stored per cycle.
+    
+    Tracks pricing information for a single trading cycle including:
+    - Cycle ID and timestamp
+    - Staleness metrics
+    - Hit/miss counters for pricing operations
+    """
+    
+    def __init__(self, cycle_id: int, timestamp: float = None):
+        """
+        Initialize pricing context.
+        
+        Args:
+            cycle_id: Trading cycle ID
+            timestamp: Context creation timestamp (defaults to current time)
+        """
+        self.cycle_id = cycle_id
+        self.timestamp = timestamp or time.time()
+        self.staleness_ms = 0
+        self.hit_count = 0
+        self.miss_count = 0
+        self.error_count = 0
+        self._logged_error = False  # Track if we've logged an error for this cycle
+        
+    def record_hit(self) -> None:
+        """Record a pricing cache hit."""
+        self.hit_count += 1
+        
+    def record_miss(self) -> None:
+        """Record a pricing cache miss."""
+        self.miss_count += 1
+        
+    def record_error(self) -> None:
+        """Record a pricing error."""
+        self.error_count += 1
+        
+    def update_staleness(self, staleness_ms: int) -> None:
+        """Update staleness metric."""
+        self.staleness_ms = staleness_ms
+        
+    def should_log_error(self) -> bool:
+        """Check if we should log an error (once per cycle)."""
+        if not self._logged_error:
+            self._logged_error = True
+            return True
+        return False
+        
+    def get_stats(self) -> dict:
+        """Get pricing context statistics."""
+        total_requests = self.hit_count + self.miss_count + self.error_count
+        hit_rate = (self.hit_count / total_requests * 100) if total_requests > 0 else 0
+        
+        return {
+            "cycle_id": self.cycle_id,
+            "timestamp": self.timestamp,
+            "staleness_ms": self.staleness_ms,
+            "hit_count": self.hit_count,
+            "miss_count": self.miss_count,
+            "error_count": self.error_count,
+            "hit_rate_pct": round(hit_rate, 2)
+        }
 
 # Cycle-local cache for debounced mark price logging
 _logged_mark_prices_this_cycle: set = set()
@@ -27,6 +103,9 @@ _mark_price_change_threshold_bps = 10  # Minimum change in basis points to log (
 
 # Global cycle price cache instance
 _cycle_price_cache = None
+
+# Global pricing context manager
+_pricing_context = None
 
 
 class CyclePriceCache:
@@ -99,6 +178,32 @@ def clear_cycle_price_cache(cycle_id: Optional[int] = None) -> None:
         cache.clear_cycle(cycle_id)
     else:
         cache.clear_all()
+
+
+def get_pricing_context() -> Optional[PricingContext]:
+    """Get the current pricing context."""
+    global _pricing_context
+    return _pricing_context
+
+
+def set_pricing_context(cycle_id: int) -> PricingContext:
+    """Set the pricing context for a cycle.
+    
+    Args:
+        cycle_id: Trading cycle ID
+        
+    Returns:
+        New pricing context instance
+    """
+    global _pricing_context
+    _pricing_context = PricingContext(cycle_id)
+    return _pricing_context
+
+
+def clear_pricing_context() -> None:
+    """Clear the current pricing context."""
+    global _pricing_context
+    _pricing_context = None
 
 
 def _fetch_and_cache_price_data(
@@ -191,26 +296,26 @@ def _fetch_and_cache_price_data(
         
         # Calculate mid price using priority order
         if bid and ask and bid > 0 and ask > 0:
-            mid_price = (bid + ask) / 2
+            mid_price = (Decimal(str(bid)) + Decimal(str(ask))) / Decimal('2')
             if source == "unknown":
                 source = "bid_ask_mid"
             else:
                 source = f"{source}_mid"
         elif last_price and last_price > 0:
-            mid_price = last_price
+            mid_price = Decimal(str(last_price))
             if source == "unknown":
                 source = "ticker_last"
         elif price_field and price_field > 0:
-            mid_price = price_field
+            mid_price = Decimal(str(price_field))
             if source == "unknown":
                 source = "ticker_price"
         
         # Validate the mid price
-        if mid_price and validate_mark_price(mid_price, canonical_symbol):
+        if mid_price and validate_mark_price(float(mid_price), canonical_symbol):
             # Cache the price data
             price_data = {
-                'bid': bid,
-                'ask': ask,
+                'bid': Decimal(str(bid)) if bid else Decimal('0'),
+                'ask': Decimal(str(ask)) if ask else Decimal('0'),
                 'mid': mid_price,
                 'src': source,
                 'ts': timestamp
@@ -255,11 +360,11 @@ CANONICAL_SYMBOLS = {
 
 # Price sanity bands
 PRICE_SANITY_BANDS = {
-    "BTC": {"min": 5000, "max": 500000},
-    "ETH": {"min": 100, "max": 20000},
-    "SOL": {"min": 1, "max": 1000},
-    "ADA": {"min": 0.01, "max": 10},
-    "BNB": {"min": 10, "max": 2000},
+    "BTC": {"min": Decimal('5000'), "max": Decimal('500000')},
+    "ETH": {"min": Decimal('100'), "max": Decimal('20000')},
+    "SOL": {"min": Decimal('1'), "max": Decimal('1000')},
+    "ADA": {"min": Decimal('0.01'), "max": Decimal('10')},
+    "BNB": {"min": Decimal('10'), "max": Decimal('2000')},
 }
 
 
@@ -340,7 +445,7 @@ def format_currency(
         Formatted currency string
     """
     if isinstance(amount, str):
-        amount = float(amount)
+        amount = Decimal(amount)
 
     if isinstance(amount, float):
         amount = Decimal(str(amount))
@@ -362,12 +467,12 @@ def format_percentage(value: Union[float, Decimal, str], precision: int = 2) -> 
         Formatted percentage string
     """
     if isinstance(value, str):
-        value = float(value)
+        value = Decimal(value)
 
     if isinstance(value, float):
         value = Decimal(str(value))
 
-    percentage = value * 100
+    percentage = value * Decimal('100')
     return f"{percentage:.{precision}f}%"
 
 
@@ -421,7 +526,7 @@ def clean_symbol(symbol: str) -> str:
     return symbol
 
 
-def calculate_percentage_change(old_value: float, new_value: float) -> float:
+def calculate_percentage_change(old_value: Union[float, Decimal], new_value: Union[float, Decimal]) -> Decimal:
     """Calculate percentage change between two values.
 
     Args:
@@ -431,13 +536,16 @@ def calculate_percentage_change(old_value: float, new_value: float) -> float:
     Returns:
         Percentage change (0.1 = 10% increase)
     """
-    if old_value == 0:
-        return 0.0
+    old_decimal = Decimal(str(old_value)) if not isinstance(old_value, Decimal) else old_value
+    new_decimal = Decimal(str(new_value)) if not isinstance(new_value, Decimal) else new_value
+    
+    if old_decimal == 0:
+        return Decimal('0')
 
-    return (new_value - old_value) / old_value
+    return (new_decimal - old_decimal) / old_decimal
 
 
-def calculate_compound_return(returns: list[float]) -> float:
+def calculate_compound_return(returns: list[Union[float, Decimal]]) -> Decimal:
     """Calculate compound return from a list of returns.
 
     Args:
@@ -447,13 +555,14 @@ def calculate_compound_return(returns: list[float]) -> float:
         Compound return
     """
     if not returns:
-        return 0.0
+        return Decimal('0')
 
-    compound = 1.0
+    compound = Decimal('1')
     for ret in returns:
-        compound *= 1 + ret
+        ret_decimal = Decimal(str(ret)) if not isinstance(ret, Decimal) else ret
+        compound *= Decimal('1') + ret_decimal
 
-    return compound - 1
+    return compound - Decimal('1')
 
 
 def ensure_directory(path: Union[str, Path]) -> Path:
@@ -768,53 +877,57 @@ def get_mark_price(
     data_engine, 
     live_mode: bool = False,
     max_age_seconds: int = 30,
-    cycle_id: Optional[int] = None
+    *,
+    cycle_id: int
 ) -> Optional[float]:
     """
-    Get mark price for a symbol using unified cycle price cache.
+    Get mark price for a symbol using pricing snapshot system.
     
     Args:
         symbol: Trading symbol in any format (e.g., 'BTC/USDT', 'BTC-USD', 'BTCUSDT')
-        data_engine: Data engine instance
-        live_mode: Whether in live trading mode (affects staleness check)
-        max_age_seconds: Maximum age of ticker data in live mode (default 30s)
-        cycle_id: Current trading cycle ID (required for caching)
+        data_engine: Data engine instance (ignored when snapshot is available)
+        live_mode: Whether in live trading mode (ignored when snapshot is available)
+        max_age_seconds: Maximum age of ticker data in live mode (ignored when snapshot is available)
+        cycle_id: Current trading cycle ID (required, keyword-only)
     
     Returns:
         Mark price as float, or None if no valid price found
-    """
-    if not data_engine:
-        logger.warning(f"No data engine provided for {symbol}")
-        return None
-    
-    if cycle_id is None:
-        logger.warning(f"No cycle_id provided for {symbol} - cannot use cache")
-        return None
-    
-    try:
-        # Fetch price data using unified cache
-        price_data = _fetch_and_cache_price_data(
-            cycle_id=cycle_id,
-            symbol=symbol,
-            data_engine=data_engine,
-            live_mode=live_mode,
-            max_age_seconds=max_age_seconds
-        )
         
-        if price_data:
-            # Log cache hit for subsequent calls
-            cache = get_cycle_price_cache()
-            cached_data = cache.get(cycle_id, to_canonical(symbol))
-            if cached_data:
-                logger.debug(f"PRICE_CACHE_HIT: symbol={to_canonical(symbol)}, mid={price_data['mid']:.4f}, ts={price_data['ts']}")
-            
-            return float(price_data['mid'])
+    Raises:
+        PricingContextError: If cycle_id is missing or invalid
+    """
+    # Get pricing context for this cycle
+    context = get_pricing_context()
+    if context is None or context.cycle_id != cycle_id:
+        if context is None or context.should_log_error():
+            logger.error(f"PRICING_CONTEXT_ERROR: No valid pricing context for cycle {cycle_id} - ABORTING CYCLE")
+        raise PricingContextError(f"No valid pricing context for cycle {cycle_id}")
+    
+    # Try to get price from current pricing snapshot first
+    snapshot = get_current_pricing_snapshot()
+    if snapshot:
+        # Snapshot exists - use it and prevent fresh price fetching
+        canonical_symbol = to_canonical(symbol)
+        price = snapshot.get_mark_price(canonical_symbol)
+        if price is not None:
+            context.record_hit()
+            logger.debug(f"PRICING_SNAPSHOT_HIT: {canonical_symbol} = {price:.4f}")
+            return price
         else:
+            context.record_miss()
+            logger.warning(f"PRICING_SNAPSHOT_MISS: {canonical_symbol} not found in snapshot")
             return None
-            
-    except Exception as e:
-        logger.error(f"Error getting mark price for {symbol}: {e}")
-        return None
+    else:
+        # No snapshot exists - check if fresh price fetching is disabled
+        context.record_error()
+        if is_fresh_price_fetching_disabled():
+            if context.should_log_error():
+                logger.error(f"get_mark_price called after snapshot creation for {symbol} - FRESH_PRICE_FETCHING_DISABLED")
+            return None
+        else:
+            if context.should_log_error():
+                logger.error(f"PRICING_SNAPSHOT_ERROR: No pricing snapshot available for cycle {cycle_id} - ERROR")
+            return None
 
 
 def get_mark_price_with_provenance(
@@ -892,28 +1005,28 @@ def get_mark_price_with_provenance(
         ask = ticker_data.get('ask')
         
         if bid and ask and bid > 0 and ask > 0:
-            mark_price = (bid + ask) / 2
+            mark_price = (Decimal(str(bid)) + Decimal(str(ask))) / Decimal('2')
             source_name = "bid_ask_mid"
-            if validate_mark_price(mark_price, canonical_symbol):
-                log_mark_price_debounced(canonical_symbol, mark_price, source_name)
+            if validate_mark_price(float(mark_price), canonical_symbol):
+                log_mark_price_debounced(canonical_symbol, float(mark_price), source_name)
                 return float(mark_price), provenance
         
         # Step 2: Try 'last' price field
         last_price = ticker_data.get('last')
         if last_price and last_price > 0:
-            mark_price = last_price
+            mark_price = Decimal(str(last_price))
             source_name = "last"
-            if validate_mark_price(mark_price, canonical_symbol):
-                log_mark_price_debounced(canonical_symbol, mark_price, source_name)
+            if validate_mark_price(float(mark_price), canonical_symbol):
+                log_mark_price_debounced(canonical_symbol, float(mark_price), source_name)
                 return float(mark_price), provenance
         
         # Step 3: Try 'price' field
         price = ticker_data.get('price')
         if price and price > 0:
-            mark_price = price
+            mark_price = Decimal(str(price))
             source_name = "price"
-            if validate_mark_price(mark_price, canonical_symbol):
-                log_mark_price_debounced(canonical_symbol, mark_price, source_name)
+            if validate_mark_price(float(mark_price), canonical_symbol):
+                log_mark_price_debounced(canonical_symbol, float(mark_price), source_name)
                 return float(mark_price), provenance
         
         # Step 4: Try OHLCV close price
@@ -921,10 +1034,10 @@ def get_mark_price_with_provenance(
         if ohlcv and len(ohlcv) >= 4:
             close_price = ohlcv[3]  # Close is typically index 3 in OHLCV
             if close_price and close_price > 0:
-                mark_price = close_price
+                mark_price = Decimal(str(close_price))
                 source_name = "ohlcv_close"
-                if validate_mark_price(mark_price, canonical_symbol):
-                    log_mark_price_debounced(canonical_symbol, mark_price, source_name)
+                if validate_mark_price(float(mark_price), canonical_symbol):
+                    log_mark_price_debounced(canonical_symbol, float(mark_price), source_name)
                     return float(mark_price), provenance
         
         # No valid price found
@@ -942,10 +1055,11 @@ def get_exit_value(
     data_engine,
     live_mode: bool = False,
     max_age_seconds: int = 30,
-    cycle_id: Optional[int] = None
+    *,
+    cycle_id: int
 ) -> Optional[float]:
     """
-    Get realistic exit value for a position based on side using unified cycle price cache.
+    Get realistic exit value for a position based on side using pricing snapshot system.
     
     For realistic exit decisions:
     - Long positions (buy) → use bid price (what you can actually sell at)
@@ -955,102 +1069,49 @@ def get_exit_value(
     Args:
         symbol: Trading symbol in any format
         side: Position side ('long', 'buy', 'sell', 'short') or quantity sign
-        data_engine: Data engine instance
-        live_mode: Whether in live trading mode
-        max_age_seconds: Maximum age of ticker data in live mode
-        cycle_id: Current trading cycle ID (required for caching)
+        data_engine: Data engine instance (ignored when snapshot is available)
+        live_mode: Whether in live trading mode (ignored when snapshot is available)
+        max_age_seconds: Maximum age of ticker data in live mode (ignored when snapshot is available)
+        cycle_id: Current trading cycle ID (required, keyword-only)
     
     Returns:
         Exit value as float, or None if no valid price found
-    """
-    if not data_engine:
-        logger.warning(f"No data engine provided for {symbol}")
-        return None
-    
-    if cycle_id is None:
-        logger.warning(f"No cycle_id provided for {symbol} - cannot use cache")
-        return None
-    
-    try:
-        # Fetch price data using unified cache
-        price_data = _fetch_and_cache_price_data(
-            cycle_id=cycle_id,
-            symbol=symbol,
-            data_engine=data_engine,
-            live_mode=live_mode,
-            max_age_seconds=max_age_seconds
-        )
         
-        if price_data:
-            canonical_symbol = to_canonical(symbol)
-            logger.debug(f"Getting exit value for {symbol} (canonical: {canonical_symbol}), side: {side}")
-            
-            # Determine position side
-            is_long = False
-            if isinstance(side, str):
-                side_lower = side.lower()
-                is_long = side_lower in ['long', 'buy', 'b']
-            elif isinstance(side, (int, float)):
-                is_long = side > 0
-            
-            # Get bid and ask prices from cached data
-            bid = price_data.get('bid', 0.0)
-            ask = price_data.get('ask', 0.0)
-            
-            # Choose appropriate exit price based on position side
-            exit_value = None
-            source_name = "unknown"
-            
-            if is_long:
-                # Long position: use bid price (what you can sell at)
-                if bid and bid > 0:
-                    exit_value = bid
-                    source_name = "bid"
-                    logger.debug(f"Exit value for long position: {exit_value} (bid)")
-                else:
-                    # Fallback to mid price
-                    if ask and ask > 0:
-                        exit_value = (bid + ask) / 2 if bid and bid > 0 else ask
-                        source_name = "ask_fallback"
-                        logger.debug(f"Exit value for long position: {exit_value} (ask fallback)")
-                    else:
-                        # Fallback to mark price
-                        exit_value = get_mark_price(symbol, data_engine, live_mode, max_age_seconds, cycle_id)
-                        source_name = "mark_price_fallback"
-                        logger.debug(f"Exit value for long position: {exit_value} (mark price fallback)")
-            else:
-                # Short position: use ask price (what you can buy back at)
-                if ask and ask > 0:
-                    exit_value = ask
-                    source_name = "ask"
-                    logger.debug(f"Exit value for short position: {exit_value} (ask)")
-                else:
-                    # Fallback to mid price
-                    if bid and bid > 0:
-                        exit_value = (bid + ask) / 2 if ask and ask > 0 else bid
-                        source_name = "bid_fallback"
-                        logger.debug(f"Exit value for short position: {exit_value} (bid fallback)")
-                    else:
-                        # Fallback to mark price
-                        exit_value = get_mark_price(symbol, data_engine, live_mode, max_age_seconds, cycle_id)
-                        source_name = "mark_price_fallback"
-                        logger.debug(f"Exit value for short position: {exit_value} (mark price fallback)")
-            
-            # Validate the exit value
-            if exit_value and exit_value > 0:
-                validation_result = validate_mark_price(exit_value, canonical_symbol)
-                if validation_result:
-                    logger.info(f"Exit value for {canonical_symbol} ({side}): {exit_value} from {source_name}")
-                    return float(exit_value)
-            
-            logger.warning(f"No valid exit value found for {canonical_symbol} ({side})")
+    Raises:
+        PricingContextError: If cycle_id is missing or invalid
+    """
+    # Get pricing context for this cycle
+    context = get_pricing_context()
+    if context is None or context.cycle_id != cycle_id:
+        if context is None or context.should_log_error():
+            logger.error(f"PRICING_CONTEXT_ERROR: No valid pricing context for cycle {cycle_id} - ABORTING CYCLE")
+        raise PricingContextError(f"No valid pricing context for cycle {cycle_id}")
+    
+    # Try to get price from current pricing snapshot first
+    snapshot = get_current_pricing_snapshot()
+    if snapshot:
+        # Snapshot exists - use it and prevent fresh price fetching
+        canonical_symbol = to_canonical(symbol)
+        price = snapshot.get_exit_value(canonical_symbol, side)
+        if price is not None:
+            context.record_hit()
+            logger.debug(f"PRICING_SNAPSHOT_HIT: {canonical_symbol} exit ({side}) = {price:.4f}")
+            return price
+        else:
+            context.record_miss()
+            logger.warning(f"PRICING_SNAPSHOT_MISS: {canonical_symbol} not found in snapshot")
+            return None
+    else:
+        # No snapshot exists - check if fresh price fetching is disabled
+        context.record_error()
+        if is_fresh_price_fetching_disabled():
+            if context.should_log_error():
+                logger.error(f"get_exit_value called after snapshot creation for {symbol} - FRESH_PRICE_FETCHING_DISABLED")
             return None
         else:
+            if context.should_log_error():
+                logger.error(f"PRICING_SNAPSHOT_ERROR: No pricing snapshot available for cycle {cycle_id} - ERROR")
             return None
-            
-    except Exception as e:
-        logger.error(f"Error getting exit value for {symbol} ({side}): {e}")
-        return None
 
 
 def get_entry_price(
@@ -1061,79 +1122,46 @@ def get_entry_price(
     cycle_id: Optional[int] = None
 ) -> Optional[float]:
     """
-    Get entry price for a symbol using unified cycle price cache.
-    Implements the exact source order: bid/ask mid → last → None.
+    Get entry price for a symbol using pricing snapshot system.
+    Implements the exact source order: bid/ask mid → price.
     
     Args:
         symbol: Trading symbol in any format
-        data_engine: Data engine instance
-        live_mode: Whether in live trading mode
-        max_age_seconds: Maximum age of ticker data in live mode
-        cycle_id: Current trading cycle ID (required for caching)
+        data_engine: Data engine instance (ignored when snapshot is available)
+        live_mode: Whether in live trading mode (ignored when snapshot is available)
+        max_age_seconds: Maximum age of ticker data in live mode (ignored when snapshot is available)
+        cycle_id: Current trading cycle ID (required for snapshot validation)
     
     Returns:
         Entry price as float, or None if no valid price found
     """
-    if not data_engine:
-        logger.warning(f"No data engine provided for {symbol}")
-        return None
-    
     if cycle_id is None:
-        logger.warning(f"No cycle_id provided for {symbol} - cannot use cache")
+        logger.error(f"get_entry_price called without cycle_id for {symbol} - ERROR")
         return None
     
-    try:
-        # Fetch price data using unified cache
-        price_data = _fetch_and_cache_price_data(
-            cycle_id=cycle_id,
-            symbol=symbol,
-            data_engine=data_engine,
-            live_mode=live_mode,
-            max_age_seconds=max_age_seconds
-        )
-        
-        if price_data:
-            canonical_symbol = to_canonical(symbol)
-            
-            # Entry price source order: bid/ask mid → last → None
-            entry_price = None
-            source_name = "unknown"
-            
-            # Step 1: Try bid/ask mid (highest priority)
-            bid = price_data.get('bid', 0.0)
-            ask = price_data.get('ask', 0.0)
-            if bid and ask and bid > 0 and ask > 0:
-                entry_price = (bid + ask) / 2
-                source_name = "bid_ask_mid"
-                if validate_mark_price(entry_price, canonical_symbol):
-                    logger.debug(f"Entry price for {canonical_symbol}: ${entry_price:.4f} (source: {source_name})")
-                    return float(entry_price)
-            
-            # Step 2: Try last price from original ticker data
-            # We need to get the last price from the original ticker data since it's not in our cache
-            try:
-                ticker_data = data_engine.get_ticker(canonical_symbol)
-                if ticker_data and ticker_data.get('last') and ticker_data['last'] > 0:
-                    entry_price = ticker_data['last']
-                    source_name = "ticker_last"
-                    if validate_mark_price(entry_price, canonical_symbol):
-                        logger.debug(f"Entry price for {canonical_symbol}: ${entry_price:.4f} (source: {source_name})")
-                        return float(entry_price)
-            except Exception as e:
-                logger.debug(f"Could not get last price for {canonical_symbol}: {e}")
-            
-            # No valid entry price found
-            logger.warning(f"No valid entry price found for {canonical_symbol} (bid={bid}, ask={ask})")
+    # Try to get price from current pricing snapshot first
+    snapshot = get_current_pricing_snapshot()
+    if snapshot:
+        # Snapshot exists - use it and prevent fresh price fetching
+        canonical_symbol = to_canonical(symbol)
+        price = snapshot.get_entry_price(canonical_symbol)
+        if price is not None:
+            logger.debug(f"PRICING_SNAPSHOT_HIT: {canonical_symbol} entry = {price:.4f}")
+            return price
+        else:
+            logger.warning(f"PRICING_SNAPSHOT_MISS: {canonical_symbol} not found in snapshot")
+            return None
+    else:
+        # No snapshot exists - check if fresh price fetching is disabled
+        if is_fresh_price_fetching_disabled():
+            logger.error(f"get_entry_price called after snapshot creation for {symbol} - FRESH_PRICE_FETCHING_DISABLED")
             return None
         else:
+            logger.error(f"PRICING_SNAPSHOT_ERROR: No pricing snapshot available for cycle {cycle_id} - ERROR")
             return None
-            
-    except Exception as e:
-        logger.error(f"Error getting entry price for {symbol}: {e}")
-        return None
 
 
-def validate_mark_price(price: Optional[float], symbol: str) -> bool:
+def validate_mark_price(price: Optional[Union[float, Decimal]], symbol: str) -> bool:
     """
     Validate that a mark price is reasonable using sanity bands.
     
@@ -1147,8 +1175,10 @@ def validate_mark_price(price: Optional[float], symbol: str) -> bool:
     if price is None:
         return False
     
-    if price <= 0:
-        logger.warning(f"Invalid mark price for {symbol}: {price} (must be > 0)")
+    price_decimal = Decimal(str(price)) if not isinstance(price, Decimal) else price
+    
+    if price_decimal <= 0:
+        logger.warning(f"Invalid mark price for {symbol}: {price_decimal} (must be > 0)")
         return False
     
     # Convert to canonical symbol for lookup
@@ -1162,8 +1192,8 @@ def validate_mark_price(price: Optional[float], symbol: str) -> bool:
         min_price = PRICE_SANITY_BANDS[base_asset]["min"]
         max_price = PRICE_SANITY_BANDS[base_asset]["max"]
         
-        if price < min_price or price > max_price:
-            logger.warning(f"Price out of sanity band for {symbol}: {price} (expected {min_price}-{max_price})")
+        if price_decimal < min_price or price_decimal > max_price:
+            logger.warning(f"Price out of sanity band for {symbol}: {price_decimal} (expected {min_price}-{max_price})")
             return False
     
     return True
