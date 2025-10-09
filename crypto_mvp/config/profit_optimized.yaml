@@ -102,9 +102,9 @@ risk:
   entry_gate:
     enable_top_k: true          # Enable top-k selection for best opportunities
     top_k_entries: 4            # PRODUCTION-AGGRESSIVE: Top 4 candidates per cycle
-    hard_floor_min: 0.20        # PRODUCTION-AGGRESSIVE: 0.20 floor for MAXIMUM trades
+    hard_floor_min: 0.15        # LOWERED: 0.15 floor to allow more trading opportunities
     gate_margin: 0.10           # 0.10 margin for flexibility
-    effective_threshold: 0.45   # PRODUCTION-AGGRESSIVE: 0.45 threshold for high trade frequency
+    effective_threshold: 0.40   # LOWERED: 0.40 threshold for more trades
     enable_vol_gate_easing: true  # Enable volatility-aware easing
     vol_ease_k: 0.05           # More easing in volatile markets
     vol_ease_max: 0.8          # Max easing allowed
@@ -147,7 +147,7 @@ risk:
   # Preflight validation configuration
   min_stop_frac: 0.001           # Minimum stop distance as fraction of entry price (0.1%)
   fallback_stop_frac: 0.005      # Fallback stop distance as fraction of entry price (0.5%)
-  short_enabled: false           # Global default - disable shorts on spot by default
+  short_enabled: true            # ENABLED: Allow shorting to profit from bearish markets
 
 # Live Trading Safeguards Configuration
 live_trading_safeguards:
@@ -223,19 +223,19 @@ universe:
 # Symbol-specific Configuration
 symbols:
   BTC/USDT:
-    allow_short: false
+    allow_short: true  # Enable shorting for profit in bearish markets
   ETH/USDT:
-    allow_short: false
+    allow_short: true  # Enable shorting for profit in bearish markets
   SOL/USDT:
-    allow_short: false
+    allow_short: true  # Enable shorting for profit in bearish markets
   ADA/USDT:
-    allow_short: false
+    allow_short: true  # Enable shorting for profit in bearish markets
   BNB/USDT:
-    allow_short: false
+    allow_short: true  # Enable shorting for profit in bearish markets
   XRP/USDT:
-    allow_short: false
+    allow_short: true  # Enable shorting for profit in bearish markets
   DOGE/USDT:
-    allow_short: false
+    allow_short: true  # Enable shorting for profit in bearish markets
 
 # Market Data Configuration
 market_data:

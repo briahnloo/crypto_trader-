@@ -5645,7 +5645,7 @@ class ProfitMaximizingTradingSystem(LoggerMixin):
             # Check each symbol for risk-on trigger
             for symbol in symbols:
                 try:
-                    risk_on_triggered, details = self.regime_detector.detect_risk_on_trigger(symbol)
+                    risk_on_triggered, details = self.regime_detector.detect_risk_on_trigger(symbol, self.data_engine)
                     
                     if risk_on_triggered:
                         # Set new risk-on window

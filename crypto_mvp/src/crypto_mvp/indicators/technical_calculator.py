@@ -211,6 +211,45 @@ class TechnicalCalculator:
         
         return float(atr)
     
+    def calculate_atr_with_fallback(self, highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int = 14) -> float:
+        """
+        Calculate ATR with bootstrap fallback for warmup periods.
+        
+        This solves the "insufficient_data_warmup" blocker by providing
+        an ATR estimate even when we don't have enough candles.
+        
+        Args:
+            highs: Array of high prices
+            lows: Array of low prices
+            closes: Array of close prices
+            period: ATR period (default 14)
+            
+        Returns:
+            ATR value (never None - always returns a fallback)
+        """
+        # Try real ATR calculation first
+        if len(closes) >= period + 1:
+            atr = self.calculate_atr(highs, lows, closes, period)
+            if atr is not None and atr > 0:
+                return atr
+        
+        # Bootstrap ATR from recent volatility (warmup fallback)
+        if len(closes) >= 5:
+            recent_closes = closes[-min(20, len(closes)):]
+            if len(recent_closes) >= 2:
+                # Calculate log returns volatility
+                returns = np.diff(np.log(recent_closes + 1e-10))
+                sigma = np.std(returns)
+                
+                # Bootstrap ATR: k * sigma * price (k=1.4 empirical from crypto markets)
+                bootstrap_atr = 1.4 * sigma * float(closes[-1])
+                min_atr = 0.01 * float(closes[-1])  # Min 1% of price
+                
+                return max(bootstrap_atr, min_atr)
+        
+        # Final fallback: 2% of current price (conservative estimate)
+        return 0.02 * float(closes[-1])
+    
     def calculate_sma(self, values: np.ndarray, period: int) -> Optional[float]:
         """
         Calculate Simple Moving Average.

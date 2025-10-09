@@ -95,8 +95,8 @@ class MomentumStrategy(Strategy):
             # Determine signal strength
             signal_strength = abs(momentum_score)
             
-            # Calculate stop loss and take profit using ATR
-            atr = self.calculator.calculate_atr(highs, lows, closes, 14)
+            # Calculate stop loss and take profit using ATR (with fallback for warmup)
+            atr = self.calculator.calculate_atr_with_fallback(highs, lows, closes, 14)
             stop_loss, take_profit = self._calculate_stop_take_profit(
                 entry_price, momentum_score, atr
             )

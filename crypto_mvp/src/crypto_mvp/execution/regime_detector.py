@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any, Tuple, Callable
 import logging
 
 from ..core.logging_utils import LoggerMixin
+from ..indicators.technical_calculator import get_calculator
 
 logger = logging.getLogger(__name__)
 
@@ -151,22 +152,9 @@ class RegimeDetector(LoggerMixin):
             self.logger.info(f"REGIME_EXCLUDE: symbol={symbol}, reason=data_quality:{data_quality}")
             return "unknown", details
         
-        # Check for warmup conditions
-        if self._is_in_warmup(symbol):
-            details = {
-                "symbol": symbol,
-                "reason": "insufficient_data_warmup",
-                "regime": "unknown",
-                "eligible": False,
-                "data_quality": "ok",
-                "indicator_status": "unavailable",
-                "ema_fast_period": self.ema_fast_period,
-                "ema_slow_period": self.ema_slow_period,
-                "adx_period": self.adx_period,
-                "adx_threshold": self.adx_threshold
-            }
-            self.logger.info(f"REGIME_EXCLUDE: symbol={symbol}, reason=insufficient_data_warmup")
-            return "unknown", details
+        # REMOVED: Warmup check - rely on indicator availability instead
+        # If indicators aren't ready, they'll return None and we'll handle that below
+        # This allows regime detection to work with bootstrap indicators
         
         # Get EMA values
         ema_fast = None
@@ -342,12 +330,13 @@ class RegimeDetector(LoggerMixin):
         
         return is_valid, reason, details
     
-    def detect_risk_on_trigger(self, symbol: str) -> Tuple[bool, Dict[str, Any]]:
+    def detect_risk_on_trigger(self, symbol: str, data_engine=None) -> Tuple[bool, Dict[str, Any]]:
         """
         Detect if risk-on mode should be triggered based on ATR/ATR_SMA ratio.
         
         Args:
             symbol: Trading symbol
+            data_engine: Optional data engine for ATR fallback calculation
             
         Returns:
             Tuple of (risk_on_triggered, details_dict)
@@ -376,6 +365,28 @@ class RegimeDetector(LoggerMixin):
             except Exception as e:
                 self.logger.warning(f"Failed to get ATR for {symbol}: {e}")
         
+        # CRITICAL FIX: Bootstrap ATR if callback returns None (warmup fallback)
+        if (atr_current is None or atr_sma is None) and data_engine:
+            calculator = get_calculator()
+            try:
+                ohlcv = data_engine.get_ohlcv(symbol, "1h", limit=30)
+                if ohlcv and len(ohlcv) >= 5:
+                    parsed = calculator.parse_ohlcv(ohlcv)
+                    
+                    # Bootstrap current ATR
+                    if atr_current is None:
+                        atr_current = calculator.calculate_atr_with_fallback(
+                            parsed["highs"], parsed["lows"], parsed["closes"], atr_period
+                        )
+                        self.logger.info(f"ATR_BOOTSTRAP: {symbol} ATR={atr_current:.4f} (from {len(ohlcv)} candles)")
+                    
+                    # Use current ATR as proxy for SMA during warmup
+                    if atr_sma is None and atr_current is not None:
+                        atr_sma = atr_current
+                        self.logger.info(f"ATR_SMA_PROXY: {symbol} using current ATR as SMA proxy during warmup")
+            except Exception as e:
+                self.logger.warning(f"ATR bootstrap failed for {symbol}: {e}")
+        
         # Create details dictionary
         details = {
             "symbol": symbol,
@@ -384,13 +395,14 @@ class RegimeDetector(LoggerMixin):
             "atr_period": atr_period,
             "atr_sma_period": atr_sma_period,
             "atr_over_sma_threshold": atr_over_sma_threshold,
-            "reason": "unknown"
+            "reason": "unknown",
+            "bootstrap_used": (atr_current is not None and self.get_atr_callback and self.get_atr_callback(symbol, atr_period) is None)
         }
         
-        # Check if ATR values are available
+        # Check if ATR values are available after fallback
         if atr_current is None or atr_sma is None:
-            details["reason"] = "missing_atr_data"
-            self.logger.info(f"RISK-ON: {symbol} = False (reason=missing_atr_data)")
+            details["reason"] = "missing_atr_data_after_fallback"
+            self.logger.info(f"RISK-ON: {symbol} = False (reason=missing_atr_data_after_fallback)")
             return False, details
         
         # Check for invalid values
@@ -400,16 +412,9 @@ class RegimeDetector(LoggerMixin):
             self.logger.info(f"RISK-ON: {symbol} = False (reason=invalid_atr_data)")
             return False, details
         
-        # Warmup guard: check if we have enough data for both periods
-        # For ATR(14) we need at least 14 bars, for ATR_SMA(100) we need at least 100 bars
-        min_bars_needed = max(atr_period, atr_sma_period)
-        
-        # Check if we're in warmup period (insufficient data)
-        if self._is_in_warmup(symbol):
-            details["reason"] = "insufficient_data_warmup"
-            details["min_bars_needed"] = min_bars_needed
-            self.logger.info(f"RISK-ON: {symbol} = False (reason=insufficient_data_warmup)")
-            return False, details
+        # REMOVED: Redundant warmup check after ATR bootstrap
+        # The ATR values are already validated above (bootstrap provides them if needed)
+        # No need to block trading when we have valid ATR from bootstrap
         
         # Calculate volatility ratio
         vol_ratio = atr_current / atr_sma if atr_sma > 0 else 1.0

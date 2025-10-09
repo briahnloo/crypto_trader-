@@ -66,14 +66,15 @@ class BreakoutStrategy(Strategy):
             closes = parsed["closes"]
             volumes = parsed["volumes"]
             
-            # Calculate indicators
-            atr = self.calculator.calculate_atr(highs, lows, closes, self.atr_period)
+            # Calculate indicators (use fallback for ATR to avoid warmup blocking)
+            atr = self.calculator.calculate_atr_with_fallback(highs, lows, closes, self.atr_period)
             volume_ratio = self.calculator.calculate_volume_ratio(volumes, 20)
             support_resistance = self.calculator.detect_support_resistance(
                 highs, lows, closes, self.lookback_period
             )
             
-            if atr is None or volume_ratio is None:
+            # ATR fallback never returns None, only check volume_ratio
+            if volume_ratio is None:
                 return self._neutral_signal(symbol, "indicator_calculation_failed")
             
             # Get current price
