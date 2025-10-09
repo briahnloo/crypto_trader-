@@ -75,36 +75,28 @@ class PricingSnapshot(LoggerMixin):
         """
         Log PRICING_SNAPSHOT_HIT with debouncing to reduce log spam.
         
+        Only logs at DEBUG level:
+        - First hit for each symbol in snapshot lifetime
+        - Cache misses (logged separately)
+        
         Args:
             symbol: Trading symbol
             price: Price being accessed
-            debounce_ms: Minimum milliseconds between logs for same symbol
+            debounce_ms: Minimum milliseconds between logs for same symbol (ignored, kept for compatibility)
         """
-        now_ms = time.time() * 1000
-        
         if symbol not in self.hit_tracking:
-            # First hit for this symbol
+            # First hit for this symbol - log once at DEBUG
             self.hit_tracking[symbol] = {
-                "last_log_time": now_ms,
+                "last_log_time": time.time() * 1000,
                 "hit_count": 1,
                 "price": price
             }
-            self.logger.info(f"PRICING_SNAPSHOT_HIT: {symbol} = {price:.4f} (snapshot_id={self.id})")
+            self.logger.debug(f"PRICING_SNAPSHOT_HIT: {symbol} = {price:.4f} (snapshot_id={self.id}, first_hit)")
         else:
+            # Subsequent hits - just increment counter, no logging (reduce noise)
             tracking = self.hit_tracking[symbol]
             tracking["hit_count"] += 1
-            time_since_last_log = now_ms - tracking["last_log_time"]
-            
-            if time_since_last_log >= debounce_ms:
-                # Log with hit count
-                self.logger.info(
-                    f"PRICING_SNAPSHOT_HIT[x{tracking['hit_count']}]: {symbol} = {price:.4f} "
-                    f"(snapshot_id={self.id}, {int(time_since_last_log)}ms)"
-                )
-                # Reset tracking
-                tracking["last_log_time"] = now_ms
-                tracking["hit_count"] = 1
-                tracking["price"] = price
+            # Don't log subsequent hits to reduce noise
     
     def lock_provenance(self, symbol: str, venue: str, price_type: str):
         """

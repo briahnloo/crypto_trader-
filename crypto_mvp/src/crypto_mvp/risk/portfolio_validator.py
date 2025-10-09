@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 import logging
 
-from ..core.money import to_dec, ZERO, get_exchange_steps, quantize_price
+from ..core.money import D, q_money, to_dec, ZERO, get_exchange_steps, quantize_price, ensure_decimal
 from ..core.logging_utils import LoggerMixin
 
 logger = logging.getLogger(__name__)
@@ -138,13 +138,24 @@ class PortfolioValidator(LoggerMixin):
         Returns:
             ValidationResult with decision and details
         """
+        # Ensure all inputs are Decimal
+        expected_cash = D(expected_cash)
+        actual_cash = D(actual_cash)
+        expected_positions_value = D(expected_positions_value)
+        actual_positions_value = D(actual_positions_value)
+        expected_realized_pnl = D(expected_realized_pnl)
+        actual_realized_pnl = D(actual_realized_pnl)
+        previous_equity = D(previous_equity)
+        fees_charged = D(fees_charged)
+        
         # Calculate deltas
         cash_delta = abs(expected_cash - actual_cash)
         positions_delta = abs(expected_positions_value - actual_positions_value)
         realized_pnl_delta = abs(expected_realized_pnl - actual_realized_pnl)
         
-        expected_equity = expected_cash + expected_positions_value + expected_realized_pnl
-        actual_equity = actual_cash + actual_positions_value + actual_realized_pnl
+        # Calculate equity with q_money for consistent precision
+        expected_equity = q_money(expected_cash + expected_positions_value + expected_realized_pnl)
+        actual_equity = q_money(actual_cash + actual_positions_value + actual_realized_pnl)
         equity_delta = abs(expected_equity - actual_equity)
         
         # Calculate adaptive epsilon based on positions

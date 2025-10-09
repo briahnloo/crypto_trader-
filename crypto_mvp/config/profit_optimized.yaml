@@ -86,13 +86,15 @@ risk:
   risk_per_trade_pct: 2.0        # AGGRESSIVE: Risk 2.0% of equity per trade (was 0.10%)
   allow_upsize: true             # AGGRESSIVE: Allow position sizing up (was false)
   
-  # Exit logic configuration
+  # Exit logic configuration - CRITICAL FOR PROFITABILITY
   exits:
     enable_chandelier: true
-    chandelier_n_atr: 2.5
+    chandelier_n_atr: 2.5  # Trailing stop: 2.5x ATR
+    time_stop_hours: 24  # Exit positions after 24 hours
     tp_ladders:
-      - { profit_pct: 0.8, pct: 0.50 }  # +0.8% profit, sell 50% of position
-      - { profit_pct: 1.5, pct: 0.50 }  # +1.5% profit, sell 50% of remaining
+      - { profit_pct: 1.0, pct: 0.33 }  # +1.0% profit, sell 33% of position
+      - { profit_pct: 2.0, pct: 0.50 }  # +2.0% profit, sell 50% of remaining
+      - { profit_pct: 4.0, pct: 1.00 }  # +4.0% profit, sell 100% of remaining
     time_stop_bars: 60
     min_qty: 1e-9
   
@@ -356,59 +358,76 @@ data_sources:
 strategies:
   momentum:
     enabled: true
-    weight: 0.30  # Increased from 0.25
+    weight: 0.35  # REAL INDICATORS: Primary strategy with RSI, MACD, Williams %R
     parameters:
       rsi_period: 14
-      rsi_oversold: 25  # More aggressive from 30
-      rsi_overbought: 75  # More aggressive from 70
+      rsi_oversold: 30  # Standard oversold threshold
+      rsi_overbought: 70  # Standard overbought threshold
       macd_fast: 12
       macd_slow: 26
       macd_signal: 9
-      min_volume_ratio: 1.2  # Reduced from 1.5
+      min_volume_ratio: 1.2
+      williams_period: 14
 
   breakout:
     enabled: true
-    weight: 0.25  # Increased from 0.20
+    weight: 0.30  # REAL INDICATORS: Secondary strategy with price action analysis
     parameters:
       lookback_period: 20
-      breakout_threshold: 0.015  # Reduced from 0.02 for more signals
+      breakout_threshold: 0.015
       volume_confirmation: true
-      min_volume_multiplier: 1.5  # Reduced from 2.0
+      min_volume_multiplier: 1.5
+      atr_period: 14
+      atr_multiplier: 2.0
 
-  arbitrage:
+  mean_reversion:
     enabled: true
-    weight: 0.20  # Increased from 0.15
+    weight: 0.20  # REAL INDICATORS: Bollinger Bands mean reversion
     parameters:
-      min_spread: 0.0005  # Reduced from 0.001 for more opportunities
-      max_position_size: 0.05
-      execution_timeout: 30
-      slippage_tolerance: 0.0005
+      bollinger_period: 20
+      bollinger_std_dev: 2.0
+      oversold_threshold: 0.2
+      overbought_threshold: 0.8
 
   sentiment:
     enabled: true
-    weight: 0.15  # Reduced from 0.20
+    weight: 0.15  # FREE DATA: Fear & Greed Index + CoinGecko
     parameters:
-      sentiment_threshold: 0.4  # Reduced from 0.6 for more signals
-      news_weight: 0.4
-      social_weight: 0.3
-      fear_greed_weight: 0.3
-      min_confidence: 0.5  # Reduced from 0.7
+      fear_greed_weight: 0.5  # Crypto Fear & Greed Index
+      market_sentiment_weight: 0.5  # CoinGecko sentiment
+      min_confidence: 0.5
+
+  # DISABLED: Strategies requiring paid APIs or not applicable
+  arbitrage:
+    enabled: false  # Not applicable for single exchange paper trading
+    weight: 0.0
 
   whale_tracking:
-    enabled: true
-    weight: 0.10  # Reduced from 0.20
-    parameters:
-      min_whale_value: 500000  # Reduced from 1000000
-      impact_threshold: 0.005  # Reduced from 0.01
-      time_window: 3600  # 1 hour
-      confidence_threshold: 0.6  # Reduced from 0.8
+    enabled: false  # Requires paid on-chain data APIs
+    weight: 0.0
+
+  news_driven:
+    enabled: false  # Requires Twitter/Reddit API access
+    weight: 0.0
+
+  on_chain:
+    enabled: false  # Requires Glassnode or similar paid APIs
+    weight: 0.0
+  
+  volatility:
+    enabled: false  # Covered by momentum/breakout ATR analysis
+    weight: 0.0
+  
+  correlation:
+    enabled: false  # Not critical for initial profitability
+    weight: 0.0
 
 # Signal Configuration
 signals:
   generation:
     enabled: true
     update_interval: 60  # seconds
-    min_confidence: 0.3  # AGGRESSIVE: Reduced from 0.4
+    min_confidence: 0.5  # QUALITY OVER QUANTITY: Only trade high-confidence setups
     max_signals_per_symbol: 3
 
   filtering:
@@ -427,11 +446,11 @@ signals:
   # Regime-specific thresholds
   regime:
     trend: 
-      min_score: 0.40  # AGGRESSIVE: Reduced from 0.50
-      min_rr: 1.2      # AGGRESSIVE: Reduced from 1.4
+      min_score: 0.50  # QUALITY SIGNALS: Higher threshold for better entries
+      min_rr: 1.5      # BETTER R:R: 1.5:1 minimum risk/reward
     range:
-      min_score: 0.35  # AGGRESSIVE: Reduced from 0.48
-      min_rr: 1.1      # AGGRESSIVE: Reduced from 1.2
+      min_score: 0.45  # QUALITY SIGNALS: Higher threshold in ranging markets
+      min_rr: 1.3      # BETTER R:R: 1.3:1 minimum in ranging markets
 
 # Portfolio Management
 portfolio:

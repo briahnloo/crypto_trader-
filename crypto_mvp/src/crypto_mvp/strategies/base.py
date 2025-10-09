@@ -64,6 +64,9 @@ class Strategy(ABC, LoggerMixin):
         Args:
             config: Strategy configuration (optional for minimal implementations)
         """
+        # Initialize LoggerMixin first to set up self.logger
+        super().__init__()
+        
         if config:
             self.config = config
             self.name = config.name

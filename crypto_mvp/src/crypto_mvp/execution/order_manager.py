@@ -1992,7 +1992,7 @@ class OrderManager(LoggerMixin):
                     profit_pct_raw = ladder.get("profit_pct", None)
                     pct_raw = ladder.get("pct", 0.25)
                     
-                    pct = self._coerce_to_float(pct_raw, "pct", 0.25)
+                    pct = float(self._coerce_to_float(pct_raw, "pct", 0.25))
                     
                     # Skip this ladder if pct coercion failed
                     if pct is None:
@@ -2052,6 +2052,18 @@ class OrderManager(LoggerMixin):
                         continue
                     
                     # Create GTC reduce-only limit order
+                    # Build metadata dictionary with safe formatting
+                    metadata = {
+                        "reason": f"tp_{float(pct)*100:.0f}pct" if r_mult is None else f"tp_{r_mult}R_{float(pct)*100:.0f}pct",
+                        "reduce_only": True,
+                        "time_in_force": "GTC",
+                        "tp_ladder": True,
+                        "pct": float(pct)
+                    }
+                    # Only add r_mult if it exists
+                    if r_mult is not None:
+                        metadata["r_mult"] = r_mult
+                    
                     order, error_reason = self.create_order(
                         symbol=symbol,
                         side=side,
@@ -2059,14 +2071,7 @@ class OrderManager(LoggerMixin):
                         quantity=ladder_qty,
                         price=rounded_target,
                         strategy="tp_ladder",
-                        metadata={
-                            "reason": f"tp_{r_mult}R_{pct*100:.0f}pct",
-                            "reduce_only": True,
-                            "time_in_force": "GTC",
-                            "tp_ladder": True,
-                            "r_mult": r_mult,
-                            "pct": pct
-                        }
+                        metadata=metadata
                     )
                     
                     if order:

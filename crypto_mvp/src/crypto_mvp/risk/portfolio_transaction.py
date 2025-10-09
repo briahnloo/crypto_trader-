@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from ..core.logging_utils import LoggerMixin
-from ..core.money import to_dec, ZERO
+from ..core.money import D, q_money, to_dec, ZERO, ensure_decimal
 from .portfolio import AdvancedPortfolioManager
 from .portfolio_validator import PortfolioValidator, validate_and_reconcile
 
@@ -264,16 +264,16 @@ class PortfolioTransaction(LoggerMixin):
         Returns:
             Total portfolio value (cash + positions + realized P&L)
         """
-        # Start with current cash balance + staged cash delta
-        current_cash = self.current_cash_equity["cash_balance"] if self.current_cash_equity else 0.0
-        staged_cash = current_cash + self.staged_cash.delta - self.staged_cash.fees
+        # Start with current cash balance + staged cash delta - convert to Decimal immediately
+        current_cash = D(self.current_cash_equity["cash_balance"] if self.current_cash_equity else 0.0)
+        staged_cash = q_money(current_cash + D(self.staged_cash.delta) - D(self.staged_cash.fees))
         
         # Add staged realized P&L
-        current_realized_pnl = self.current_cash_equity.get("total_realized_pnl", 0.0) if self.current_cash_equity else 0.0
-        staged_realized_pnl = current_realized_pnl + self.staged_realized_pnl.delta
+        current_realized_pnl = D(self.current_cash_equity.get("total_realized_pnl", 0.0) if self.current_cash_equity else 0.0)
+        staged_realized_pnl = q_money(current_realized_pnl + D(self.staged_realized_pnl.delta))
         
         # Compute staged positions value
-        staged_positions_value = 0.0
+        staged_positions_value = D("0.0")
         
         # Process each symbol with staged changes
         all_symbols = set(self.staged_positions.keys())
@@ -281,32 +281,32 @@ class PortfolioTransaction(LoggerMixin):
             all_symbols.add(pos["symbol"])
         
         for symbol in all_symbols:
-            # Get current position
-            current_qty = 0.0
-            current_entry_price = 0.0
+            # Get current position - convert to Decimal immediately
+            current_qty = D("0.0")
+            current_entry_price = D("0.0")
             for pos in self.current_positions or []:
                 if pos["symbol"] == symbol:
-                    current_qty = pos["quantity"]
-                    current_entry_price = pos["entry_price"]
+                    current_qty = D(pos["quantity"])
+                    current_entry_price = D(pos["entry_price"])
                     break
             
             # Apply staged changes
             staged_qty = current_qty
             if symbol in self.staged_positions:
-                staged_qty += self.staged_positions[symbol].quantity_delta
+                staged_qty = q_money(staged_qty + D(self.staged_positions[symbol].quantity_delta))
             
-            # Use mark price for valuation
-            mark_price = mark_prices.get(symbol, current_entry_price)
-            if mark_price <= 0:
+            # Use mark price for valuation - convert to Decimal
+            mark_price = D(mark_prices.get(symbol, float(current_entry_price)))
+            if mark_price <= D("0"):
                 mark_price = current_entry_price
             
             # Add to total positions value
-            staged_positions_value += staged_qty * mark_price
+            staged_positions_value = q_money(staged_positions_value + (staged_qty * mark_price))
         
-        # Total staged portfolio value
-        staged_total = staged_cash + staged_positions_value + staged_realized_pnl
+        # Total staged portfolio value - use q_money for final precision
+        staged_total = q_money(staged_cash + staged_positions_value + staged_realized_pnl)
         
-        return staged_total
+        return float(staged_total)  # Return as float for compatibility with existing code
     
     def _validate_staged_state(self, mark_prices: Dict[str, float]) -> Tuple[bool, float, bool]:
         """Validate the final staged state against previous equity with auto-reconciliation.

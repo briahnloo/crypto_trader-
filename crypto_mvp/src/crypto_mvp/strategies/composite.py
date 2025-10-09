@@ -107,6 +107,22 @@ class ProfitMaximizingSignalEngine(LoggerMixin):
         self.logger.info(
             f"Initialized {len(self.strategies)} strategies with weights: {self.strategy_weights}"
         )
+    
+    def set_data_engine(self, data_engine) -> None:
+        """Set data engine for all strategies that need market data.
+        
+        Args:
+            data_engine: Data engine instance for fetching OHLCV and market data
+        """
+        for name, strategy in self.strategies.items():
+            try:
+                # Set data_engine on all strategies (Python allows dynamic attributes)
+                # Strategies that don't use it will simply ignore it
+                strategy.data_engine = data_engine
+                self.logger.debug(f"Set data_engine for {name} strategy")
+            except Exception as e:
+                # Strategy doesn't support setting attributes - skip it
+                self.logger.debug(f"Couldn't set data_engine for {name}: {e}")
 
     async def generate_composite_signals(
         self, symbol: str, timeframe: Optional[str] = None
@@ -145,6 +161,17 @@ class ProfitMaximizingSignalEngine(LoggerMixin):
         for name, strategy in self.strategies.items():
             try:
                 signal = strategy.analyze(symbol, timeframe)
+                
+                # Safety check: ensure signal is a dict
+                if signal is None or not isinstance(signal, dict):
+                    self.logger.warning(f"Strategy {name} returned invalid signal: {type(signal)}")
+                    signal = {
+                        "score": 0.0,
+                        "signal_strength": 0.0,
+                        "confidence": 0.0,
+                        "error": "invalid_return_type"
+                    }
+                
                 individual_signals[name] = signal
 
                 raw_score = signal.get("score", 0.0)

@@ -1,461 +1,232 @@
 """
-Enhanced money helper for Decimal-only monetary math with exchange step quantization.
+Safe Decimal-based money handling for accounting paths.
 
-This module provides:
-- to_dec(x): Convert any numeric to Decimal with single precision context
-- Exchange-specific quantization maps (price_step, qty_step, notional_step)
-- Safe Decimal operations for all monetary calculations
-
-Usage:
-    from crypto_mvp.core.money import to_dec, quantize_price, quantize_qty
-    
-    price = to_dec(100.50)
-    qty = to_dec("0.001")
-    notional = price * qty  # Always Decimal * Decimal
-    
-    # Quantize to exchange steps
-    final_price = quantize_price(price, "BTC/USDT")
-    final_qty = quantize_qty(qty, "BTC/USDT")
+This module provides helpers to eliminate float/Decimal mixing in financial calculations,
+ensuring consistent precision across all accounting operations.
 """
 
 from decimal import Decimal, ROUND_HALF_UP, ROUND_DOWN, getcontext
-from typing import Union, Dict, Optional
-import logging
+from typing import Dict, Union
 
-logger = logging.getLogger(__name__)
-
-# Set global precision for all Decimal operations
+# Set precision to 28 decimal places for financial calculations
 getcontext().prec = 28
 
-# Exchange step sizes per symbol (can be updated from exchange info)
-EXCHANGE_STEPS = {
-    "BTC/USDT": {
-        "price_step": Decimal("0.01"),      # $0.01 tick size
-        "qty_step": Decimal("0.00001"),     # 5 decimal places
-        "notional_step": Decimal("0.01"),   # $0.01 minimum
-        "min_notional": Decimal("10.00")    # $10 minimum order
-    },
-    "ETH/USDT": {
-        "price_step": Decimal("0.01"),
-        "qty_step": Decimal("0.0001"),      # 4 decimal places
-        "notional_step": Decimal("0.01"),
-        "min_notional": Decimal("10.00")
-    },
-    "ADA/USDT": {
-        "price_step": Decimal("0.0001"),    # $0.0001 tick size
-        "qty_step": Decimal("0.1"),         # 1 decimal place
-        "notional_step": Decimal("0.01"),
-        "min_notional": Decimal("10.00")
-    },
-    "SOL/USDT": {
-        "price_step": Decimal("0.01"),
-        "qty_step": Decimal("0.01"),
-        "notional_step": Decimal("0.01"),
-        "min_notional": Decimal("10.00")
-    },
-    "DEFAULT": {
-        "price_step": Decimal("0.01"),
-        "qty_step": Decimal("0.00001"),
-        "notional_step": Decimal("0.01"),
-        "min_notional": Decimal("10.00")
-    }
-}
+# Common Decimal constants
+ZERO = Decimal("0")
+ONE = Decimal("1")
+
+# Money quantization to 2 decimal places (cents)
+MONEY_Q = Decimal("0.01")
 
 
-def to_dec(value: Union[str, int, float, Decimal, None]) -> Decimal:
+def D(x) -> Decimal:
     """
-    Convert any numeric value to Decimal with single precision context.
-    
-    This is the ONLY function that should be used to convert to Decimal
-    to ensure consistent precision handling across the codebase.
+    Convert any numeric type to Decimal safely.
     
     Args:
-        value: Value to convert (str, int, float, Decimal, or None)
+        x: Value to convert (int, float, str, or Decimal)
         
     Returns:
-        Decimal representation of the value (Decimal('0') for None)
+        Decimal representation of the input
         
     Examples:
-        >>> to_dec(100.5)
-        Decimal('100.5')
-        >>> to_dec("0.005")
-        Decimal('0.005')
-        >>> to_dec(None)
-        Decimal('0')
+        >>> D(100)
+        Decimal('100')
+        >>> D(99.99)
+        Decimal('99.99')
+        >>> D("123.45")
+        Decimal('123.45')
     """
-    if value is None:
-        return Decimal('0')
-    elif isinstance(value, Decimal):
-        return value
-    elif isinstance(value, (int, float)):
-        return Decimal(str(value))
-    elif isinstance(value, str):
-        try:
-            return Decimal(value)
-        except Exception as e:
-            logger.error(f"Failed to convert string '{value}' to Decimal: {e}")
-            return Decimal('0')
-    else:
-        logger.warning(f"Unexpected type {type(value)} for to_dec, attempting conversion")
-        return Decimal(str(value))
+    if isinstance(x, Decimal):
+        return x
+    if isinstance(x, (int, str)):
+        return Decimal(str(x))
+    if isinstance(x, float):
+        return Decimal(str(x))
+    return Decimal(str(x))
+
+
+def q_money(x: Decimal) -> Decimal:
+    """
+    Quantize a Decimal to money precision (2 decimal places).
+    
+    Args:
+        x: Decimal value to quantize
+        
+    Returns:
+        Decimal quantized to cents with ROUND_HALF_UP
+        
+    Examples:
+        >>> q_money(D("123.456"))
+        Decimal('123.46')
+        >>> q_money(D("99.994"))
+        Decimal('99.99')
+    """
+    return D(x).quantize(MONEY_Q, rounding=ROUND_HALF_UP)
+
+
+def ensure_decimal(*values) -> bool:
+    """
+    Check that all values are Decimal instances.
+    
+    Args:
+        *values: Variable number of values to check
+        
+    Returns:
+        True if all values are Decimal, False otherwise
+        
+    Raises:
+        ValueError: If any value is not a Decimal (when used with assert)
+    """
+    return all(isinstance(v, Decimal) for v in values)
+
+
+def safe_add(*values) -> Decimal:
+    """
+    Safely add multiple values after converting to Decimal.
+    
+    Args:
+        *values: Variable number of values to add
+        
+    Returns:
+        Sum of all values as Decimal
+    """
+    return sum((D(v) for v in values), start=Decimal("0"))
+
+
+def safe_subtract(a, b) -> Decimal:
+    """
+    Safely subtract b from a after converting to Decimal.
+    
+    Args:
+        a: Minuend
+        b: Subtrahend
+        
+    Returns:
+        a - b as Decimal
+    """
+    return D(a) - D(b)
+
+
+def safe_multiply(a, b) -> Decimal:
+    """
+    Safely multiply two values after converting to Decimal.
+    
+    Args:
+        a: First multiplicand
+        b: Second multiplicand
+        
+    Returns:
+        a * b as Decimal
+    """
+    return D(a) * D(b)
+
+
+def safe_divide(a, b) -> Decimal:
+    """
+    Safely divide a by b after converting to Decimal.
+    
+    Args:
+        a: Numerator
+        b: Denominator
+        
+    Returns:
+        a / b as Decimal
+        
+    Raises:
+        ZeroDivisionError: If b is zero
+    """
+    if D(b) == Decimal("0"):
+        raise ZeroDivisionError("Division by zero")
+    return D(a) / D(b)
+
+
+# Aliases for compatibility with existing code
+def to_dec(x) -> Decimal:
+    """
+    Alias for D() - convert to Decimal.
+    Provided for compatibility with existing code.
+    """
+    return D(x)
+
+
+def quantize_price(price: Union[Decimal, float, int, str], symbol: str = "") -> Decimal:
+    """
+    Quantize price to appropriate precision.
+    
+    Args:
+        price: Price value to quantize
+        symbol: Trading symbol (optional, for symbol-specific precision)
+        
+    Returns:
+        Quantized price as Decimal
+    """
+    # Default to 2 decimal places for prices
+    # This can be customized per symbol if needed
+    price_d = D(price)
+    
+    # Use symbol-specific steps if available
+    if symbol:
+        steps = get_exchange_steps(symbol)
+        return price_d.quantize(steps["price_step"], rounding=ROUND_HALF_UP)
+    
+    # Default: 2 decimal places for prices
+    return price_d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def quantize_qty(quantity: Union[Decimal, float, int, str], symbol: str = "") -> Decimal:
+    """
+    Quantize quantity to appropriate precision.
+    
+    Args:
+        quantity: Quantity value to quantize
+        symbol: Trading symbol (optional, for symbol-specific precision)
+        
+    Returns:
+        Quantized quantity as Decimal
+    """
+    qty_d = D(quantity)
+    
+    # Use symbol-specific steps if available
+    if symbol:
+        steps = get_exchange_steps(symbol)
+        return qty_d.quantize(steps["qty_step"], rounding=ROUND_DOWN)
+    
+    # Default: 6 decimal places for quantities
+    return qty_d.quantize(Decimal("0.000001"), rounding=ROUND_DOWN)
 
 
 def get_exchange_steps(symbol: str) -> Dict[str, Decimal]:
     """
-    Get exchange step sizes for a symbol.
+    Get exchange step sizes for a given symbol.
     
     Args:
-        symbol: Trading symbol (e.g., "BTC/USDT")
-        
-    Returns:
-        Dictionary with price_step, qty_step, notional_step, min_notional
-    """
-    # Normalize symbol format
-    normalized = symbol.replace("-", "/").upper()
-    return EXCHANGE_STEPS.get(normalized, EXCHANGE_STEPS["DEFAULT"])
-
-
-def quantize_price(price: Union[float, Decimal, str], symbol: str) -> Decimal:
-    """
-    Quantize price to exchange tick size.
-    
-    Args:
-        price: Price value to quantize
         symbol: Trading symbol
         
     Returns:
-        Quantized price as Decimal
-        
-    Example:
-        >>> quantize_price(100.523, "BTC/USDT")
-        Decimal('100.52')  # Rounded to $0.01 tick
+        Dictionary with price_step and qty_step as Decimals
     """
-    price_dec = to_dec(price)
-    steps = get_exchange_steps(symbol)
-    price_step = steps["price_step"]
+    # Default steps - can be customized per symbol
+    # These are typical for major crypto exchanges
     
-    # Quantize to nearest tick
-    return (price_dec / price_step).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * price_step
-
-
-def quantize_qty(quantity: Union[float, Decimal, str], symbol: str) -> Decimal:
-    """
-    Quantize quantity to exchange lot size.
+    # Symbol-specific overrides
+    symbol_steps = {
+        "BTC/USDT": {"price_step": Decimal("0.01"), "qty_step": Decimal("0.00001")},
+        "BTC-USD": {"price_step": Decimal("0.01"), "qty_step": Decimal("0.00001")},
+        "ETH/USDT": {"price_step": Decimal("0.01"), "qty_step": Decimal("0.0001")},
+        "ETH-USD": {"price_step": Decimal("0.01"), "qty_step": Decimal("0.0001")},
+        "SOL/USDT": {"price_step": Decimal("0.001"), "qty_step": Decimal("0.001")},
+        "SOL-USD": {"price_step": Decimal("0.001"), "qty_step": Decimal("0.001")},
+        "ADA/USDT": {"price_step": Decimal("0.0001"), "qty_step": Decimal("0.1")},
+        "ADA-USD": {"price_step": Decimal("0.0001"), "qty_step": Decimal("0.1")},
+        "DOGE/USDT": {"price_step": Decimal("0.00001"), "qty_step": Decimal("1")},
+        "DOGE-USD": {"price_step": Decimal("0.00001"), "qty_step": Decimal("1")},
+        "XRP/USDT": {"price_step": Decimal("0.0001"), "qty_step": Decimal("0.1")},
+        "XRP-USD": {"price_step": Decimal("0.0001"), "qty_step": Decimal("0.1")},
+    }
     
-    Args:
-        quantity: Quantity value to quantize
-        symbol: Trading symbol
-        
-    Returns:
-        Quantized quantity as Decimal
-        
-    Example:
-        >>> quantize_qty(0.123456, "BTC/USDT")
-        Decimal('0.12346')  # Rounded to 5 decimals
-    """
-    qty_dec = to_dec(quantity)
-    steps = get_exchange_steps(symbol)
-    qty_step = steps["qty_step"]
-    
-    # Quantize to nearest lot size
-    return (qty_dec / qty_step).quantize(Decimal('1'), rounding=ROUND_DOWN) * qty_step
-
-
-def quantize_notional(notional: Union[float, Decimal, str], symbol: str) -> Decimal:
-    """
-    Quantize notional value to exchange minimum.
-    
-    Args:
-        notional: Notional value to quantize
-        symbol: Trading symbol
-        
-    Returns:
-        Quantized notional as Decimal
-    """
-    notional_dec = to_dec(notional)
-    steps = get_exchange_steps(symbol)
-    notional_step = steps["notional_step"]
-    
-    return (notional_dec / notional_step).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * notional_step
-
-
-def validate_order_size(
-    price: Union[float, Decimal, str],
-    quantity: Union[float, Decimal, str],
-    symbol: str
-) -> tuple[bool, str]:
-    """
-    Validate order meets exchange minimums.
-    
-    Args:
-        price: Order price
-        quantity: Order quantity
-        symbol: Trading symbol
-        
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
-    price_dec = to_dec(price)
-    qty_dec = to_dec(quantity)
-    steps = get_exchange_steps(symbol)
-    
-    if price_dec <= 0:
-        return False, f"Price must be positive: {price_dec}"
-    
-    if qty_dec <= 0:
-        return False, f"Quantity must be positive: {qty_dec}"
-    
-    notional = price_dec * qty_dec
-    min_notional = steps["min_notional"]
-    
-    if notional < min_notional:
-        return False, f"Notional ${notional} below minimum ${min_notional}"
-    
-    return True, ""
-
-
-def calculate_position_size_from_risk(
-    entry_price: Union[float, Decimal, str],
-    stop_loss: Union[float, Decimal, str],
-    risk_amount: Union[float, Decimal, str],
-    symbol: str
-) -> Decimal:
-    """
-    Calculate position size based on risk amount.
-    
-    Args:
-        entry_price: Entry price
-        stop_loss: Stop loss price
-        risk_amount: Dollar amount to risk
-        symbol: Trading symbol
-        
-    Returns:
-        Position size as Decimal
-        
-    Example:
-        >>> calculate_position_size_from_risk(100, 95, 50, "BTC/USDT")
-        Decimal('10.00000')  # Risk $50 with $5 stop = 10 units
-    """
-    entry_dec = to_dec(entry_price)
-    stop_dec = to_dec(stop_loss)
-    risk_dec = to_dec(risk_amount)
-    
-    risk_per_unit = abs(entry_dec - stop_dec)
-    
-    if risk_per_unit == 0:
-        logger.error("Risk per unit is zero, cannot calculate position size")
-        return Decimal('0')
-    
-    position_size = risk_dec / risk_per_unit
-    
-    # Quantize to exchange lot size
-    return quantize_qty(position_size, symbol)
-
-
-def calculate_tp_ladder(
-    entry_price: Union[float, Decimal, str],
-    stop_loss: Union[float, Decimal, str],
-    side: str,
-    symbol: str,
-    reward_ratios: Optional[list[Union[float, Decimal, str]]] = None
-) -> list[Decimal]:
-    """
-    Calculate take profit ladder levels using Decimal.
-    
-    Args:
-        entry_price: Entry price
-        stop_loss: Stop loss price
-        side: Position side ("long"/"buy" or "short"/"sell")
-        symbol: Trading symbol
-        reward_ratios: List of reward:risk ratios (default: [1.0, 1.5, 2.0])
-        
-    Returns:
-        List of take profit prices as Decimal
-        
-    Example:
-        >>> calculate_tp_ladder(100, 95, "buy", "BTC/USDT")
-        [Decimal('105.00'), Decimal('107.50'), Decimal('110.00')]
-    """
-    entry_dec = to_dec(entry_price)
-    stop_dec = to_dec(stop_loss)
-    
-    # Default reward ratios: 1R, 1.5R, 2R
-    if reward_ratios is None:
-        ratios = [to_dec("1.0"), to_dec("1.5"), to_dec("2.0")]
-    else:
-        ratios = [to_dec(r) for r in reward_ratios]
-    
-    # Calculate risk distance
-    risk_distance = abs(entry_dec - stop_dec)
-    
-    # Calculate TP levels
-    tp_levels = []
-    is_long = side.lower() in ['long', 'buy', 'b']
-    
-    for ratio in ratios:
-        reward_distance = risk_distance * ratio
-        
-        if is_long:
-            tp_price = entry_dec + reward_distance
-        else:
-            tp_price = entry_dec - reward_distance
-        
-        # Quantize to exchange tick size
-        tp_quantized = quantize_price(tp_price, symbol)
-        tp_levels.append(tp_quantized)
-    
-    logger.info(f"Created {len(tp_levels)} TP levels for {symbol}: {[float(tp) for tp in tp_levels]}")
-    
-    return tp_levels
-
-
-def calculate_sl_level(
-    entry_price: Union[float, Decimal, str],
-    atr: Union[float, Decimal, str],
-    side: str,
-    symbol: str,
-    atr_multiplier: Union[float, Decimal, str] = "2.0"
-) -> Decimal:
-    """
-    Calculate stop loss level using ATR-based approach.
-    
-    Args:
-        entry_price: Entry price
-        atr: Average True Range value
-        side: Position side ("long"/"buy" or "short"/"sell")
-        symbol: Trading symbol
-        atr_multiplier: ATR multiplier (default: 2.0)
-        
-    Returns:
-        Stop loss price as Decimal
-        
-    Example:
-        >>> calculate_sl_level(100, 2.5, "buy", "BTC/USDT", "2.0")
-        Decimal('95.00')  # Entry - (2.0 * 2.5)
-    """
-    entry_dec = to_dec(entry_price)
-    atr_dec = to_dec(atr)
-    mult_dec = to_dec(atr_multiplier)
-    
-    is_long = side.lower() in ['long', 'buy', 'b']
-    
-    stop_distance = atr_dec * mult_dec
-    
-    if is_long:
-        sl_price = entry_dec - stop_distance
-    else:
-        sl_price = entry_dec + stop_distance
-    
-    # Quantize to exchange tick size
-    sl_quantized = quantize_price(sl_price, symbol)
-    
-    logger.info(f"Created SL level for {symbol} at {float(sl_quantized)}")
-    
-    return sl_quantized
-
-
-def calculate_trailing_stop(
-    peak_price: Union[float, Decimal, str],
-    atr: Union[float, Decimal, str],
-    side: str,
-    symbol: str,
-    atr_multiplier: Union[float, Decimal, str] = "2.0"
-) -> Decimal:
-    """
-    Calculate trailing stop (Chandelier) using peak price and ATR.
-    
-    Args:
-        peak_price: Peak price since position opened
-        atr: Average True Range value
-        side: Position side ("long"/"buy" or "short"/"sell")
-        symbol: Trading symbol
-        atr_multiplier: ATR multiplier (default: 2.0)
-        
-    Returns:
-        Trailing stop price as Decimal
-    """
-    peak_dec = to_dec(peak_price)
-    atr_dec = to_dec(atr)
-    mult_dec = to_dec(atr_multiplier)
-    
-    is_long = side.lower() in ['long', 'buy', 'b']
-    
-    trail_distance = atr_dec * mult_dec
-    
-    if is_long:
-        trail_price = peak_dec - trail_distance
-    else:
-        trail_price = peak_dec + trail_distance
-    
-    # Quantize to exchange tick size
-    return quantize_price(trail_price, symbol)
-
-
-# Convenience constants as Decimal
-ZERO = Decimal('0')
-ONE = Decimal('1')
-TWO = Decimal('2')
-HALF = Decimal('0.5')
-
-# Common percentages as Decimal
-PCT_1 = Decimal('0.01')      # 1%
-PCT_2 = Decimal('0.02')      # 2%
-PCT_5 = Decimal('0.05')      # 5%
-PCT_10 = Decimal('0.10')     # 10%
-PCT_50 = Decimal('0.50')     # 50%
-PCT_100 = Decimal('1.00')    # 100%
-
-# Fee rates as Decimal
-FEE_MAKER_BPS = Decimal('0.0001')   # 1 bps
-FEE_TAKER_BPS = Decimal('0.0002')   # 2 bps
-
-
-# Re-export common functions from decimal_money for compatibility
-from .decimal_money import (
-    format_currency,
-    format_quantity,
-    safe_divide,
-    safe_multiply,
-    sum_decimals,
-    abs_decimal,
-    is_positive,
-    is_negative,
-    is_zero
-)
-
-__all__ = [
-    # Core conversion
-    'to_dec',
-    
-    # Quantization
-    'quantize_price',
-    'quantize_qty',
-    'quantize_notional',
-    'get_exchange_steps',
-    
-    # Validation
-    'validate_order_size',
-    
-    # Calculations
-    'calculate_position_size_from_risk',
-    'calculate_tp_ladder',
-    'calculate_sl_level',
-    'calculate_trailing_stop',
-    
-    # Constants
-    'ZERO', 'ONE', 'TWO', 'HALF',
-    'PCT_1', 'PCT_2', 'PCT_5', 'PCT_10', 'PCT_50', 'PCT_100',
-    'FEE_MAKER_BPS', 'FEE_TAKER_BPS',
-    
-    # Re-exported
-    'format_currency',
-    'format_quantity',
-    'safe_divide',
-    'safe_multiply',
-    'sum_decimals',
-    'abs_decimal',
-    'is_positive',
-    'is_negative',
-    'is_zero'
-]
-
+    # Return symbol-specific steps or defaults
+    return symbol_steps.get(
+        symbol,
+        {"price_step": Decimal("0.01"), "qty_step": Decimal("0.000001")}
+    )

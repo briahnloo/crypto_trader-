@@ -237,6 +237,9 @@ class LoggerMixin:
         if not hasattr(self, "_logger") or self._logger is None:
             # Try to get config from the instance if available
             config = getattr(self, "config", {})
+            # Handle case where config exists but is None
+            if config is None:
+                config = {}
             logging_config = config.get("logging", {})
 
             if logging_config:
